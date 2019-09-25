@@ -1,0 +1,622 @@
+---
+title: "Untitled"
+output:
+  word_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r init, include = FALSE}
+
+# Path from project directory to this file
+# NOTE: must be set in each programme separately
+subfolder <- "00_replication/gharbi_2019"
+
+# Initialise the workspace
+source(file.path(subfolder, "00_init.R"))
+source(file.path(subfolder, "00_tabulation.R"))
+
+# Infrastructure packages
+library(knitr)
+library(kableExtra)
+library(broom)
+library(forcats)
+library(ggplot2)
+
+# Analysis packages
+library(geepack)
+
+
+format <- "markdown"
+
+```
+
+```{r load-data}
+
+time_window <- 60
+
+patients <- load_derived("patients")
+
+epi <- load_derived(str_c("epi_", time_window))
+abx <- load_derived("abx")
+
+```
+
+```{r summ-measures}
+
+# Entire cohort
+mean(with(patients, year(enter_date) - year(birth_date)))
+mean(patients$female)
+
+# Episodes
+mean(epi$age)
+
+sum(epi$female == "yes")
+mean(epi$female == "yes")
+
+```
+
+
+```{r tab-p-diff}
+
+tab_p_diff <- function(dt, var, group){
+  # Calculate the p-values of differences between two groups using
+  # the Chi-square test (categorical variables) or Wilcoxon rank 
+  # test (continuous variables).
+  #
+  # Args:
+  #   dt - data.table on which to calculate rates (must include column `num_abx`)
+  #   outcome - name of the outcome variable
+  #   var - name of the variable to stratify by
+  #   group - ignored
+  #
+  # Result:
+  #   a data.table with the name of the tested variable and the p-value 
+  #   provided by the test
+  
+  if(is.numeric(dt[[var]])){
+    p_val <- wilcox.test(as.formula(str_c(var, "~", group)), data = dt)$p.value
+  } else {
+    p_val <- chisq.test(table(dt[[var]], dt[[group]]))$p.value
+  }
+  
+  res <- data.table(var = var, value = p_val)
+  res[, (group) := "p_val"]
+  res[]
+}
+
+```
+
+```{r update-death}
+
+# Add death within 30/60 days to the episodes
+# NOTE: Move to 02_derived_tables.R when possible
+
+epi[, died := FALSE]
+epi[patients, on = .(patid, start < death_date, after >= death_date), died := TRUE]
+epi[, died := factor(died, c(FALSE, TRUE), c("no", "yes"))]
+
+
+```
+
+
+```{r table-1-all}
+
+# NOTE: This analysis was added post-hoc. Integrate with next block if there is time.
+
+epi[, cci_bin := factor(cci > 0, c(FALSE, TRUE), c("0", "1+"))]
+
+# Define which variables to tabulate by presc
+
+tbl_def <- function(fun, keep = FALSE){
+  tab_ <- partial(tab, fun = fun)
+
+  list(
+    "Total" = tab_(total ~ ., col = FALSE),
+    "Age (cont.)" = tab_(age ~ .),
+    "Age (cat.)" = tab_(age_cat ~ .),
+    "Female" = tab_(female ~ ., keep_only = keep),
+    "IMD" = tab_(imd ~ .),
+    "Region" = tab_(region ~ .),
+    "CCI (cont.)" = tab_(cci ~ .),
+    "CCI (cat.)" = tab_(cci_bin ~ .),
+    "Smoking status" = tab_(smoke ~ .),
+    "Recurrent UTI" = tab_(recur ~ ., keep_only = keep),
+    
+    "Inpatient admission" = list(
+      "prior 7 days" = tab_(hosp_7 ~ ., keep_only = keep),
+      "prior 30 days" = tab_(hosp_30 ~ ., keep_only = keep),
+      "nights last year" = tab_(hosp_nights ~ .),
+      "hospitalisations last year" = tab_(hosp_n ~ .)
+    ),
+    
+    "Accidents & Emergencies" = list(
+      "prior 30 days" = tab_(ae_30 ~ ., keep_only = keep),
+      "attendances last year" = tab_(ae_n ~ .)
+    ),
+    
+    "Antibiotics in prior 7 days" = tab_(abx_7 ~ ., keep_only = keep),
+    "Antibiotics in prior 30 days" = tab_(abx_30 ~ ., keep_only = keep),
+    "Index event was home visit" = tab_(home ~ ., keep_only = keep),
+    
+    "Sepsis" = tab_(sep ~ ., keep_only = keep),
+    "Died" = tab_(died ~ ., keep_only = keep)
+  )
+}
+
+# Calculate the table using functions from 00_tabulation.R
+tbl_1_total <- tbl_def(tab_default, "yes") %>% render_tab(copy(epi)[, total := "total"])
+
+
+# Render with kable
+tbl_1_total_rend <- 
+  tbl_1_total %>%
+  rbindlist() %>% 
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Patient characteristics", "n (%) / mean (sd)"),
+    caption = "Baseline table" 
+  )
+
+if(format != "markdown"){
+  tbl_1_rend %<>% 
+    kable_styling()
+    annotate_table(tbl_1_total)
+}
+
+tbl_1_total_rend  
+
+```
+
+
+
+```{r table-1-strat}
+
+# Define which variables to tabulate by presc
+
+tbl_def <- function(fun, keep = FALSE){
+  tab_ <- partial(tab, fun = fun)
+
+  list(
+    "Total" = tab_(total ~ presc, col = FALSE),
+    "Age (cont.)" = tab_(age ~ presc),
+    "Age (cat.)" = tab_(age_cat ~ presc),
+    "Female" = tab_(female ~ presc, keep_only = keep),
+    "IMD" = tab_(imd ~ presc),
+    "Region" = tab_(region ~ presc),
+    "CCI (cont.)" = tab_(cci ~ presc),
+    "CCI (cat.)" = tab_(cci_bin ~ presc),
+    "Smoking status" = tab_(smoke ~ presc),
+    "Recurrent UTI" = tab_(recur ~ presc, keep_only = keep),
+    
+    "Inpatient admission" = list(
+      "prior 7 days" = tab_(hosp_7 ~ presc, keep_only = keep),
+      "prior 30 days" = tab_(hosp_30 ~ presc, keep_only = keep),
+      "nights last year" = tab_(hosp_nights ~ presc),
+      "hospitalisations last year" = tab_(hosp_n ~ presc)
+    ),
+    
+    "Accidents & Emergencies" = list(
+      "prior 30 days" = tab_(ae_30 ~ presc, keep_only = keep),
+      "attendances last year" = tab_(ae_n ~ presc)
+    ),
+    
+    "Antibiotics in prior 7 days" = tab_(abx_7 ~ presc, keep_only = keep),
+    "Antibiotics in prior 30 days" = tab_(abx_30 ~ presc, keep_only = keep),
+    "Index event was home visit" = tab_(home ~ presc, keep_only = keep),
+    
+    "Sepsis" = tab_(sep ~ presc, keep_only = keep),
+    "Died" = tab_(died ~ presc, keep_only = keep)
+  )
+}
+
+# Calculate the table using functions from 00_tabulation.R
+tbl_1 <- tbl_def(tab_default, "yes") %>% render_tab(copy(epi)[, total := "total"])
+
+# Calculate the p-values for differences
+tbl_1_p <- tbl_def(tab_p_diff)[-1] %>% render_tab(epi)
+
+for(v in names(tbl_1_p)){
+  # Add the formatted p-value to each calculated element
+  
+  p_val <- tbl_1_p[[v]][, as.numeric(p_val)]
+  p_val <- if_else(p_val < 0.001, "<0.001", prty(p_val, 3))
+  
+  if(nrow(tbl_1[[v]]) != nrow(tbl_1_p[[v]])){
+    # For variables with more than one level
+    tbl_1[[v]][, p_val := c(p_val, rep("", nrow(tbl_1[[v]]) - 1))]
+  } else{
+    # For all others
+    tbl_1[[v]][, p_val := p_val]
+  }
+}
+
+tbl_1$Total[, p_val := ""]
+
+
+# Render with kable
+tbl_1_rend <- 
+  tbl_1 %>%
+  rbindlist() %>% 
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Patient characteristics", rep("n (%) / mean (sd)", 2), 
+                  "p-value"),
+    caption = "Baseline table" 
+  )
+
+if(format != "markdown"){
+  tbl_1_rend %<>% 
+    kable_styling() %>% 
+    add_header_above(c(" " = 1, "Yes" = 1, "No" = 1, " " = 1)) %>% 
+    add_header_above(c(" " = 1, "Immediate antibiotic treatment" = 2, " " = 1)) %>% 
+    annotate_table(tbl_1)
+}
+
+tbl_1_rend  
+
+```
+
+
+```{r table-2}
+
+# Get all antibiotics precribed at the start of a UTI episode
+uti_abx <- abx[(epi[, .(patid, start)]), on = .(patid, prescdate = start), nomatch = 0]
+
+
+
+# Re-group and collapse them
+abx_grps <- antibiotics() %>% 
+  select(prodcode, atcgroup) %>% 
+  collect_dt()
+
+uti_abx[abx_grps, on = "prodcode", atcgroup := atcgroup]
+
+  # Keep some antibiotics individually
+single <- c("trimethoprim", "nitrofurantoin", "pivmecillinam",
+            "clindamycin", "polymyxin")
+uti_abx[substance %in% single, grp := substance]
+
+
+  # Group amoxicillin and co-amoxi
+uti_abx[substance %like% "amoxi", grp := "amoxicillin (/ clavulanic acid)"]
+
+  # Group others by broad category
+uti_abx[substance %like% "^cef", grp := "cephalosporins"]
+uti_abx[atcgroup == "Quinolones", grp := "quinolones"]
+uti_abx[atcgroup %like% "Macrolide" & 
+          !substance %in% single, grp := "macrolides"]
+uti_abx[substance %like% "penem", grp := "carbapenems"]
+uti_abx[atcgroup == "Aminoglycosides", grp := "aminoglycosides"]
+
+  # Group penicillins
+uti_abx[substance %like% "fluclox", grp := "penicillinase resistant penicillins"]
+uti_abx[substance %like% "phenoxy|benzyl", grp := "benzylpenicillin and phenoxymethylpenicillin"]
+
+  # Collect the rest as other
+uti_abx[, grp := fct_infreq(factor(grp))]
+uti_abx[, grp := fct_explicit_na(grp, na_level = "others")]
+
+# Count and calculate proportions, then display in a table
+tbl_2 <- 
+  uti_abx[, .(N = prty(.N), 
+            p = prty(.N / nrow(uti_abx) * 100, 2)), by = grp] %>% 
+      .[order(grp)]
+tbl_2[p == "0.00", p := "<0.01"]
+
+tbl_2_rend <- 
+  tbl_2%>% 
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Antibiotic", "n", "%"),
+    caption = "Distributions of antibiotics table" 
+  )
+
+if(format != "markdown"){
+  tbl_2_rend %<>% kable_styling()
+}
+
+tbl_2_rend
+
+
+```
+
+
+```{r tab_rate}
+
+crude_gee <- function(mod, var){
+  # Extract crude fixed effects from a fitted GEE model
+  #
+  # Args:
+  #   mod - fitted geeglm model
+  #   var - name of the variable for which to extract effects
+  #
+  # Result:
+  #   data.table with variable names, levels, effect and 95%-CI
+  
+  coefs <- tidy(mod) %>% as.data.table()
+  x <- mod$data[[var]]
+  
+  if(is.factor(x)){
+    lvls <- levels(x)
+    ref <- 
+      data.table(variable = var, value = lvls[1], effect = 1, lower = NA, upper = NA)
+  } else {
+    ref <- NULL
+  }
+  
+  eff <- 
+    coefs[
+      str_detect(term, var) & !str_detect(term, ":"), c(
+        .(variable = var, value = str_replace(term, var, ""), effect = exp(estimate)), 
+        norm_ci(estimate, std.error)
+      )]
+  
+  rbind(ref, eff)
+}
+
+p_val <- function(mod, var){
+  # Extract the p.value from a glmmTMB model
+  #
+  # Args:
+  #   mod - fitted glmmTMB model (not zero-inflated)
+  #   var - name of the variable for which to extract the p.values
+  #
+  # Result:
+  #   data.table
+  
+  coefs <- tidy(mod) %>% as.data.table()
+  
+  coefs %<>% .[str_detect(term, var), .(variable = var, 
+                                        value = str_replace(term, var, ""), 
+                                        p.value)]
+  coefs[]
+}
+
+tab_odds <- function(dt, outcome, var, group){
+  # Calculate the crude relative odds of an outcome stratified by `var`. 
+  # This function ignores the `group` parameter (only included for compatibility 
+  # with the tabulation functions)
+  #
+  # Args:
+  #   dt - data.table on which to calculate rates (must include column `num_abx`)
+  #   outcome - name of the outcome variable
+  #   var - name of the variable to stratify by
+  #   group - ignored
+  #
+  # Result:
+  #   a data.table with all levels of `var` in a var column and columns `rate`
+  #   (absolute rate) and `ratio` (relative rate)
+  
+  
+  mod <- geeglm(as.formula(str_c(outcome, "~", var)), id = patid, wave = nmr,
+                data = dt, family = binomial, corstr = "exchangeable")
+  
+  est_cols <- c("effect", "lower", "upper")
+  to_string <- substitute(str_c(effect, " (", lower, "-", upper, ")"))
+  
+  summ <- 
+    list(or = crude_gee, p.value = p_val) %>% 
+    invoke_map(.x = list(list(mod = mod, var = var)))
+  
+  summ$or[, (est_cols) := map(.SD, prty, 2), .SDcols = est_cols]
+  summ$or[, or := eval(to_string)]
+  
+  summ$p.value[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))] 
+  
+  summ %<>% reduce(merge, by = c("variable", "value"))
+  
+  summ[, .(var = value, .all = "all", or, p.value)]
+}
+
+```
+
+
+```{r table-3}
+
+tab_sep_odds <- partial(tab_odds, outcome = "sep == 'yes'")
+
+params <- list(aux = c("patid", "sep", "nmr"), cast = c("or", "p.value"))
+
+tbl_def <- list(
+  "No antibiotic" = tab(presc ~ ., fun = tab_sep_odds, params, keep_only = "no"),
+  "Age (cat.)" = tab(age_cat ~ ., fun = tab_sep_odds, params),
+  "Female" = tab(female ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
+  "IMD" = tab(imd ~ ., fun = tab_sep_odds, params),
+  "Region" = tab(region ~ ., fun = tab_sep_odds, params),
+  "Financial year" = tab(year ~ ., fun = tab_sep_odds, params),
+  "CCI (cont.)" = tab(cci ~ ., fun = tab_sep_odds, params),
+  "Smoking status" = tab(smoke ~ ., fun = tab_sep_odds, params),
+  "Recurrent UTI" = tab(recur ~ ., fun = tab_sep_odds, params),
+  
+  "Inpatient admission" = list(
+    "IP prior 7 days" = tab(hosp_7 ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
+    "IP prior 30 days" = tab(hosp_30 ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
+    "IP nights last year" = tab(hosp_nights ~ ., fun = tab_sep_odds, params),
+    "hospitalisations last year" = tab(hosp_n ~ ., fun = tab_sep_odds, params)
+  ),
+  
+  "Accidents & Emergencies" = list(
+    "A&E prior 30 days" = tab(ae_30 ~ ., fun = tab_sep_odds, params),
+    "attendances last year" = tab(ae_n ~ ., fun = tab_sep_odds, params)
+  ),
+  
+  "Antibiotics in prior 30 days" = tab(abx_30 ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
+  "Index event was home visit" = tab(home ~ ., fun = tab_sep_odds, params, keep_only = "yes")
+)
+
+# Calculate the table using functions from 00_tabulation.R
+tbl_3 <- tbl_def %>% render_tab(epi)
+
+
+# Run a fully adjusted model with all variables 
+variables <- c("presc", "age_cat", "female", "imd", "region", "year", "cci", "smoke",
+               "hosp_7", "hosp_30", "hosp_nights", "hosp_n", "ae_30", "ae_n", "abx_30")
+
+if(time_window == 60){
+  # NOTE: Recurrent UTI has p-value > 0.2, home visit is <0.2 for 60 day window
+  variables <- c(variables, "home")
+}
+
+full_form <- as.formula(str_c("sep == 'yes' ~ ", str_c(variables, collapse = " + ")))
+full_mod <- geeglm(full_form, id = patid, family = binomial, data = epi, corstr = "exchangeable")
+
+full_coefs <- tidy(full_mod)
+setDT(full_coefs)
+
+full_coefs[, est := prty(exp(estimate), 2)]
+full_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
+full_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
+full_coefs[, or_mult := str_c(est, " (", lower, "-", upper, ")")]
+full_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+
+full_coefs %<>% .[-1] %>% 
+  cbind(map_df(tbl_3, ~ (if(any(.$p.value_all < 0.2)) .[, "var"] else NULL)))
+
+
+
+# Render with kable
+tbl_3_rend <- 
+  tbl_3 %>%
+  rbindlist() %>% 
+  merge(full_coefs[, .(var, or_mult, p.value)], by = "var", all.x = TRUE, sort = FALSE) %>% 
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Patient characteristics", rep(c("OR (95%-CI)", "p-value"), 2)),
+    caption = "Odds of sepsis table" 
+  ) 
+
+if(format != "markdown"){
+  tbl_3_rend %<>%  
+    kable_styling() %>% 
+    add_header_above(c(" " = 1, "Univariate" = 2, "Multivariate" = 2)) %>% 
+    annotate_table(tbl_3)
+}
+
+tbl_3_rend
+
+
+```
+
+```{r nnh}
+
+# See Bender et al. (2007) for formulas
+
+mean_mod <- glm(full_form, family = binomial, data = epi) # This is approximate, coefficients stay very close
+
+
+# Exposure impact number
+
+ard_exp <- function(exposed){
+  # Exposed in this case means "not prescribed"
+  pr_actual <- predict(mean_mod, newdata = exposed, type = "response")
+  exposed$presc <- "yes"
+  pr_trt <- predict(mean_mod, newdata = exposed, type = "response")
+  
+  mean(pr_actual - pr_trt)
+}
+
+  # Point estimate
+ein <- 1 / ard_exp(epi[presc == "no"])
+print(str_c("The exposure impact number was ", ein))
+
+  # Bootstrapped confidence intervals
+n_boot <- 10000
+n_exp <- nrow(epi[presc == "no"])
+
+set.seed <- 123
+ard_exp_boot <- rerun(n_boot, sample(1:n_exp, n_exp, replace = TRUE)) %>% 
+  map_dbl(~ ard_exp(epi[presc == "no"][.]))
+ard_exp_boot <- sort(ard_exp_boot, decreasing = TRUE)
+
+ein_ci <- 1 / ard_exp_boot[c(0.025 * n_boot, 0.975 * n_boot)]
+
+
+
+# Number needed to be exposed
+ard_un <- function(unexposed){
+  # Exposed in this case means "not prescribed"
+  pr_actual <- predict(mean_mod, newdata = unexposed, type = "response")
+  unexposed$presc <- "no"
+  pr_no <- predict(mean_mod, newdata = unexposed, type = "response")
+  
+  mean(pr_no - pr_actual)
+}
+
+  # Point estimate
+nne <- 1 / ard_un(epi[presc == "yes"])
+print(str_c("The number needed to expose was ", nne))
+
+  # Bootstrapped confidence intervals
+n_boot <- 10000
+n_un <- nrow(epi[presc == "yes"])
+
+set.seed <- 123
+ard_un_boot <- rerun(n_boot, sample(1:n_un, n_un, replace = TRUE)) %>% 
+  map_dbl(~ ard_un(epi[presc == "yes"][.]))
+ard_un_boot <- sort(ard_un_boot, decreasing = TRUE)
+
+nne_ci <- 1 / ard_un_boot[c(0.025 * n_boot, 0.975 * n_boot)]
+
+
+
+```
+
+
+```{r sens-abx-before}
+
+# Run some additional analysis to investigate the sensitivity of the results to patients with antibiotics in the days before episode start
+
+# No antibiotic whatsoever 7 days before
+sens_form <- as.formula(str_c("sep == 'yes' ~ ", str_c(variables, collapse = " + ")))
+sens_no7 <- geeglm(sens_form, id = patid, family = binomial, data = epi[abx_7 == "no"], corstr = "exchangeable")
+
+no7_coefs <- tidy(sens_no7)
+setDT(no7_coefs)
+
+no7_coefs[, est := prty(exp(estimate), 2)]
+no7_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
+no7_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
+no7_coefs[, or_mult := str_c(est, " (", lower, "-", upper, ")")]
+no7_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+
+
+# No antibiotic whatsoever 30 days before
+variables <- c("presc", "age_cat", "female", "imd", "region", "year", "cci", "smoke",
+               "hosp_7", "hosp_30", "hosp_nights", "hosp_n", "ae_30", "ae_n")
+
+sens_form <- as.formula(str_c("sep == 'yes' ~ ", str_c(variables, collapse = " + ")))
+sens_noabx <- geeglm(sens_form, id = patid, family = binomial, data = epi[abx_30 == "no"], corstr = "exchangeable")
+
+noabx_coefs <- tidy(sens_noabx)
+setDT(noabx_coefs)
+
+noabx_coefs[, est := prty(exp(estimate), 2)]
+noabx_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
+noabx_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
+noabx_coefs[, or_mult := str_c(est, " (", lower, "-", upper, ")")]
+noabx_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+
+```
+
+
+```{r run-everything}
+# Helper chunk to run entire document with RStudio
+```
