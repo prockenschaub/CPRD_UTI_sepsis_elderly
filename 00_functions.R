@@ -1,6 +1,13 @@
-
-
-
+###########################################################################
+# Author:   Patrick Rockenschaub
+# Project:  Preserve Antibiotics through Safe Stewardship (PASS)
+#           Primary Care work package 1
+#
+# File:     00_functions.R
+# Date:     07/11/2018
+# Task:     Provide some convenience functions
+#
+###########################################################################
 
 
 # General functions -------------------------------------------------------

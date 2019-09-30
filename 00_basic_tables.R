@@ -1,16 +1,14 @@
-#--------------------------------------------------------------------------
+###########################################################################
+# Author:   Patrick Rockenschaub
+# Project:  Preserve Antibiotics through Safe Stewardship (PASS)
+#           Primary Care work package 1
 #
-# Program: 01_basic_tables.R
-# Author:  Patrick Rockenschaub
-# Date:    20/07/2018
+# File:     01_basic_tables.R
+# Date:     20/07/2018
+# Task:     Create database objects of all the basic tables in the database
+#           to access, manipulate and join them from within R
 #
-# Purpose: Create database objects of all the basic tables in the database
-#          to access, manipulate and join them from within R
-#
-# NOTE:    Updated for the complete data extract
-#
-#--------------------------------------------------------------------------
-
+###########################################################################
 
 
 

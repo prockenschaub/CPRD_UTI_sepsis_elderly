@@ -5,9 +5,7 @@
 #
 # File:     00_init.R
 # Date:     07/11/2018
-# Task:     Initialise the workspace for a clean new analysis of antibiotic
-#           prescribing in COPD patients (i.e. remove previous objects, 
-#           load libraries, etc.)
+# Task:     Initialise the workspace for a clean new analysis
 #
 ###########################################################################
 
@@ -20,7 +18,7 @@ if(exists(".conn")){
 
 # Load the base settings and functions
 suppressMessages({
-  source("00_init.R")
+  source("00_root_init.R")
   source("00_basic_tables.R")
   source("00_code_lists.R")
 })
