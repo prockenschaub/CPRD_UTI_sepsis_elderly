@@ -2,7 +2,6 @@
 # Author:   Patrick Rockenschaub
 # Project:  Preserve Antibiotics through Safe Stewardship (PASS)
 #           Primary Care work package 1
-#           COPD analysis
 #
 # File:     00_init.R
 # Date:     07/11/2018
@@ -27,7 +26,7 @@ suppressMessages({
 })
 
 # Load local functions
-subfolder <- "00_replication/gharbi_2019"
+subfolder <- "."
 source(file.path(subfolder, "00_functions.R"))
 
 # Set path to store the derived datasets

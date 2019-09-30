@@ -2,7 +2,6 @@
 # Author:   Patrick Rockenschaub
 # Project:  Preserve Antibiotics through Safe Stewardship (PASS)
 #           Primary Care work package 1
-#           COPD analysis
 #
 # File:     00_tabulation.R
 # Date:     07/11/2018
