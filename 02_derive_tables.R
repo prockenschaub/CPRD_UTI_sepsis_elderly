@@ -14,15 +14,15 @@
 
 # Path from project directory to this file
 # NOTE: must be set in each programme separately
-subfolder <- "."
+subfolder <- "00_replication/gharbi_2019"
 
 # Initialise the workspace
 source(file.path(subfolder, "00_init.R"))
 
 
 
-time_window <- 60         # Main analysis: 60
-sens_exact_codes <- FALSE # Main analysis: FALSE
+time_window <- 60          # Main analysis: 60
+sens_exact_codes <- FALSE  # Main analysis: FALSE
 
 
 
@@ -282,8 +282,18 @@ epi[, after := start %m+% days(time_window)]
 epi[, sep := FALSE]
 epi[sep, on = .(patid, start < sepdate, after >= sepdate), 
     sep := TRUE]
-
 epi[, sep := factor(sep, c(FALSE, TRUE), c("no", "yes"))]
+
+# Add "time to sepsis"
+tts <- epi %>% 
+  .[, .(patid, start, after, epidate = start)] %>% 
+  .[sep, on = .(patid, start < sepdate, after >= sepdate), 
+           .(patid, epidate, tts = time_length(epidate %--% sepdate, unit = "days")), nomatch = 0] %>% 
+  .[order(patid, tts)] %>% 
+  .[, .SD[1], by = .(patid, epidate)]
+epi[tts, on = .(patid, start = epidate), tts := tts]
+
+
 
 attrition$`10_sep_yes_abx` <- nrow(epi[presc == "yes" & sep == "yes"])
 attrition$`10_sep_no_abx` <- nrow(epi[presc == "yes" & sep == "no"])
@@ -467,10 +477,17 @@ c_types <- read_excel(file.path(subfolder, "cons_types.xlsx"),
                       sheet = "Consultation types")
 setDT(c_types)
 
-epi[cons, on = .(eventid = consid), constype := constype]
+epi[cons, on = .(patid, eventid = consid), constype := constype]
 epi[c_types, on = "constype", home := homevisit]
 
 epi[, home := factor(home, c("no", "yes"))]
+
+  # NOTE: some medication review is coded much later, leading to a
+  #       home date (e.g. UTI in 2012, medication review after 
+  #       March 2015, consultation ID is associated with the latter
+  #       date. Only happens for 24 episodes, so code as negative)
+epi[is.na(home), home := "no"]
+
 
 # Prophylactic treatment in the previous month
 nt[, until := eventdate %m+% days(as.integer(duration))]
@@ -482,6 +499,38 @@ epi[nt, on = .(patid, start > until, before_30 <= until),
     prophy := TRUE]
 
 epi[, prophy := factor(prophy, c(FALSE, TRUE), c("no", "yes"))]
+
+
+# Add death within 30/60 days to the episodes (including time to death)
+epi[, died := FALSE]
+epi[, i.start := start]
+epi[patients, on = .(patid, start < death_date, after >= death_date), 
+    c("died", "ttd") := 
+      .(TRUE, time_length(i.start %--% death_date, unit = "days"))]
+epi[, i.start := NULL]
+epi[, died := factor(died, c(FALSE, TRUE), c("no", "yes"))]
+
+
+# Add non-UTI, non-sepsis hospitalisations
+other_hosp <- admission %>% 
+  .[!sep_sec, on = .(patid, spno)] %>%  # not a sepsis admission
+  .[!uti_sec, on = .(patid, spno)] %>%  # not a uti admission
+  .[source == "Emergency"] 
+
+epi[, other_hosp := FALSE]
+epi[other_hosp, on = .(patid, start < admidate, after >= admidate), 
+    other_hosp := TRUE]
+epi[, other_hosp := factor(other_hosp, c(FALSE, TRUE), c("no", "yes"))]
+
+  # Add "time to hospitalisation"
+tth <- epi %>% 
+  .[, .(patid, start, after, epidate = start)] %>% 
+  .[other_hosp, on = .(patid, start < admidate, after >= admidate), 
+    .(patid, epidate, tth = time_length(epidate %--% admidate, unit = "days")), nomatch = 0] %>% 
+  .[order(patid, tth)] %>% 
+  .[, .SD[1], by = .(patid, epidate)]
+epi[tth, on = .(patid, start = epidate), tth := tth]
+
 
 
 # Save dataset ------------------------------------------------------------

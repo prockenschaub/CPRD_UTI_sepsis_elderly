@@ -3,6 +3,10 @@ title: "Untitled"
 output:
   word_document: default
   html_document: default
+params:
+  time_window: 60
+  bootstrap_nneh: 200
+  format: "markdown"
 editor_options:
   chunk_output_type: console
 ---
@@ -15,7 +19,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Path from project directory to this file
 # NOTE: must be set in each programme separately
-subfolder <- "."
+subfolder <- "00_replication/gharbi_2019"
 
 # Initialise the workspace
 source(file.path(subfolder, "00_init.R"))
@@ -27,23 +31,40 @@ library(kableExtra)
 library(broom)
 library(forcats)
 library(ggplot2)
+library(tableone)
 
 # Analysis packages
 library(geepack)
 
-
-format <- "markdown"
+# Shorten parameters
+time_window <- params$time_window
+bootstrap_nneh <- params$bootstrap_nneh
+format <- params$format
 
 ```
 
 ```{r load-data}
 
-time_window <- 60
-
 patients <- load_derived("patients")
 
 epi <- load_derived(str_c("epi_", time_window))
+setorder(epi, patid, start)
+
 abx <- load_derived("abx")
+
+```
+
+```{r recode-cci}
+
+epi[, cci_bin := factor(cci > 0, c(FALSE, TRUE), c("0", "1+"))]
+
+```
+
+```{r recode-years}
+
+# CHANGE June 6th 2020: 
+# This change in coding the year was made in response to a request by reviewer #1
+epi[, year := fct_relevel(year, "2007", "2008", "2009")]
 
 ```
 
@@ -62,276 +83,39 @@ mean(epi$female == "yes")
 ```
 
 
-```{r tab-p-diff}
 
-tab_p_diff <- function(dt, var, group){
-  # Calculate the p-values of differences between two groups using
-  # the Chi-square test (categorical variables) or Wilcoxon rank 
-  # test (continuous variables).
-  #
-  # Args:
-  #   dt - data.table on which to calculate rates (must include column `num_abx`)
-  #   outcome - name of the outcome variable
-  #   var - name of the variable to stratify by
-  #   group - ignored
-  #
-  # Result:
-  #   a data.table with the name of the tested variable and the p-value 
-  #   provided by the test
-  
-  if(is.numeric(dt[[var]])){
-    p_val <- wilcox.test(as.formula(str_c(var, "~", group)), data = dt)$p.value
-  } else {
-    p_val <- chisq.test(table(dt[[var]], dt[[group]]))$p.value
-  }
-  
-  res <- data.table(var = var, value = p_val)
-  res[, (group) := "p_val"]
-  res[]
-}
+```{r table-1}
 
-```
+covar <- c("age", "age_cat", "female", "imd", "region", "year",
+             "cci", "cci_bin", "smoke", "recur",
+             "hosp_7", "hosp_30", "hosp_nights", "hosp_n",
+             "ae_30", "ae_n", "abx_7", "abx_30", "home",
+             "sep", "tts", "other_hosp", "died")
 
-```{r update-death}
+nonnormal <- c("age", "cci", "hosp_nights", "hosp_n", "ae_n", "tts")
 
-# Add death within 30/60 days to the episodes
-# NOTE: Move to 02_derived_tables.R when possible
+total <- CreateTableOne(covar, data = epi)
+strat <- CreateTableOne(covar, strata = "presc", data = epi)
 
-epi[, died := FALSE]
-epi[patients, on = .(patid, start < death_date, after >= death_date), died := TRUE]
-epi[, died := factor(died, c(FALSE, TRUE), c("no", "yes"))]
 
+list(
+  print(total, dropEqual = TRUE, printToggle = FALSE, nonnormal = nonnormal), 
+  print(strat, dropEqual = TRUE, printToggle = FALSE, nonnormal = nonnormal, test = FALSE),
+  print(strat, dropEqual = TRUE, printToggle = FALSE, nonnormal = nonnormal)[, "p", drop = FALSE]
+) %>% 
+  reduce(cbind) %>%
+  as.data.table(keep.rownames = "var")
 
 ```
 
 
-```{r table-1-all}
+```{r time-to-sepsis}
 
-# NOTE: This analysis was added post-hoc. Integrate with next block if there is time.
+median(epi[presc == "no" & !is.na(tts)]$tts)
+quantile(epi[presc == "no" & !is.na(tts)]$tts, c(0.25, 0.75))
 
-epi[, cci_bin := factor(cci > 0, c(FALSE, TRUE), c("0", "1+"))]
-
-# Define which variables to tabulate by presc
-
-tbl_def <- function(fun, keep = FALSE){
-  tab_ <- partial(tab, fun = fun)
-
-  list(
-    "Total" = tab_(total ~ ., col = FALSE),
-    "Age (cont.)" = tab_(age ~ .),
-    "Age (cat.)" = tab_(age_cat ~ .),
-    "Female" = tab_(female ~ ., keep_only = keep),
-    "IMD" = tab_(imd ~ .),
-    "Region" = tab_(region ~ .),
-    "CCI (cont.)" = tab_(cci ~ .),
-    "CCI (cat.)" = tab_(cci_bin ~ .),
-    "Smoking status" = tab_(smoke ~ .),
-    "Recurrent UTI" = tab_(recur ~ ., keep_only = keep),
-    
-    "Inpatient admission" = list(
-      "prior 7 days" = tab_(hosp_7 ~ ., keep_only = keep),
-      "prior 30 days" = tab_(hosp_30 ~ ., keep_only = keep),
-      "nights last year" = tab_(hosp_nights ~ .),
-      "hospitalisations last year" = tab_(hosp_n ~ .)
-    ),
-    
-    "Accidents & Emergencies" = list(
-      "prior 30 days" = tab_(ae_30 ~ ., keep_only = keep),
-      "attendances last year" = tab_(ae_n ~ .)
-    ),
-    
-    "Antibiotics in prior 7 days" = tab_(abx_7 ~ ., keep_only = keep),
-    "Antibiotics in prior 30 days" = tab_(abx_30 ~ ., keep_only = keep),
-    "Index event was home visit" = tab_(home ~ ., keep_only = keep),
-    
-    "Sepsis" = tab_(sep ~ ., keep_only = keep),
-    "Died" = tab_(died ~ ., keep_only = keep)
-  )
-}
-
-# Calculate the table using functions from 00_tabulation.R
-tbl_1_total <- tbl_def(tab_default, "yes") %>% render_tab(copy(epi)[, total := "total"])
-
-
-# Render with kable
-tbl_1_total_rend <- 
-  tbl_1_total %>%
-  rbindlist() %>% 
-  kable(
-    format, 
-    booktabs = TRUE,
-    linesep = "",
-    escape = FALSE,
-    col.names = c("Patient characteristics", "n (%) / mean (sd)"),
-    caption = "Baseline table" 
-  )
-
-if(format != "markdown"){
-  tbl_1_rend %<>% 
-    kable_styling()
-    annotate_table(tbl_1_total)
-}
-
-tbl_1_total_rend  
-
-```
-
-
-
-```{r table-1-strat}
-
-# Define which variables to tabulate by presc
-
-tbl_def <- function(fun, keep = FALSE){
-  tab_ <- partial(tab, fun = fun)
-
-  list(
-    "Total" = tab_(total ~ presc, col = FALSE),
-    "Age (cont.)" = tab_(age ~ presc),
-    "Age (cat.)" = tab_(age_cat ~ presc),
-    "Female" = tab_(female ~ presc, keep_only = keep),
-    "IMD" = tab_(imd ~ presc),
-    "Region" = tab_(region ~ presc),
-    "CCI (cont.)" = tab_(cci ~ presc),
-    "CCI (cat.)" = tab_(cci_bin ~ presc),
-    "Smoking status" = tab_(smoke ~ presc),
-    "Recurrent UTI" = tab_(recur ~ presc, keep_only = keep),
-    
-    "Inpatient admission" = list(
-      "prior 7 days" = tab_(hosp_7 ~ presc, keep_only = keep),
-      "prior 30 days" = tab_(hosp_30 ~ presc, keep_only = keep),
-      "nights last year" = tab_(hosp_nights ~ presc),
-      "hospitalisations last year" = tab_(hosp_n ~ presc)
-    ),
-    
-    "Accidents & Emergencies" = list(
-      "prior 30 days" = tab_(ae_30 ~ presc, keep_only = keep),
-      "attendances last year" = tab_(ae_n ~ presc)
-    ),
-    
-    "Antibiotics in prior 7 days" = tab_(abx_7 ~ presc, keep_only = keep),
-    "Antibiotics in prior 30 days" = tab_(abx_30 ~ presc, keep_only = keep),
-    "Index event was home visit" = tab_(home ~ presc, keep_only = keep),
-    
-    "Sepsis" = tab_(sep ~ presc, keep_only = keep),
-    "Died" = tab_(died ~ presc, keep_only = keep)
-  )
-}
-
-# Calculate the table using functions from 00_tabulation.R
-tbl_1 <- tbl_def(tab_default, "yes") %>% render_tab(copy(epi)[, total := "total"])
-
-# Calculate the p-values for differences
-tbl_1_p <- tbl_def(tab_p_diff)[-1] %>% render_tab(epi)
-
-for(v in names(tbl_1_p)){
-  # Add the formatted p-value to each calculated element
-  
-  p_val <- tbl_1_p[[v]][, as.numeric(p_val)]
-  p_val <- if_else(p_val < 0.001, "<0.001", prty(p_val, 3))
-  
-  if(nrow(tbl_1[[v]]) != nrow(tbl_1_p[[v]])){
-    # For variables with more than one level
-    tbl_1[[v]][, p_val := c(p_val, rep("", nrow(tbl_1[[v]]) - 1))]
-  } else{
-    # For all others
-    tbl_1[[v]][, p_val := p_val]
-  }
-}
-
-tbl_1$Total[, p_val := ""]
-
-
-# Render with kable
-tbl_1_rend <- 
-  tbl_1 %>%
-  rbindlist() %>% 
-  kable(
-    format, 
-    booktabs = TRUE,
-    linesep = "",
-    escape = FALSE,
-    col.names = c("Patient characteristics", rep("n (%) / mean (sd)", 2), 
-                  "p-value"),
-    caption = "Baseline table" 
-  )
-
-if(format != "markdown"){
-  tbl_1_rend %<>% 
-    kable_styling() %>% 
-    add_header_above(c(" " = 1, "Yes" = 1, "No" = 1, " " = 1)) %>% 
-    add_header_above(c(" " = 1, "Immediate antibiotic treatment" = 2, " " = 1)) %>% 
-    annotate_table(tbl_1)
-}
-
-tbl_1_rend  
-
-```
-
-
-```{r table-2}
-
-# Get all antibiotics precribed at the start of a UTI episode
-uti_abx <- abx[(epi[, .(patid, start)]), on = .(patid, prescdate = start), nomatch = 0]
-
-
-
-# Re-group and collapse them
-abx_grps <- antibiotics() %>% 
-  select(prodcode, atcgroup) %>% 
-  collect_dt()
-
-uti_abx[abx_grps, on = "prodcode", atcgroup := atcgroup]
-
-  # Keep some antibiotics individually
-single <- c("trimethoprim", "nitrofurantoin", "pivmecillinam",
-            "clindamycin", "polymyxin")
-uti_abx[substance %in% single, grp := substance]
-
-
-  # Group amoxicillin and co-amoxi
-uti_abx[substance %like% "amoxi", grp := "amoxicillin (/ clavulanic acid)"]
-
-  # Group others by broad category
-uti_abx[substance %like% "^cef", grp := "cephalosporins"]
-uti_abx[atcgroup == "Quinolones", grp := "quinolones"]
-uti_abx[atcgroup %like% "Macrolide" & 
-          !substance %in% single, grp := "macrolides"]
-uti_abx[substance %like% "penem", grp := "carbapenems"]
-uti_abx[atcgroup == "Aminoglycosides", grp := "aminoglycosides"]
-
-  # Group penicillins
-uti_abx[substance %like% "fluclox", grp := "penicillinase resistant penicillins"]
-uti_abx[substance %like% "phenoxy|benzyl", grp := "benzylpenicillin and phenoxymethylpenicillin"]
-
-  # Collect the rest as other
-uti_abx[, grp := fct_infreq(factor(grp))]
-uti_abx[, grp := fct_explicit_na(grp, na_level = "others")]
-
-# Count and calculate proportions, then display in a table
-tbl_2 <- 
-  uti_abx[, .(N = prty(.N), 
-            p = prty(.N / nrow(uti_abx) * 100, 2)), by = grp] %>% 
-      .[order(grp)]
-tbl_2[p == "0.00", p := "<0.01"]
-
-tbl_2_rend <- 
-  tbl_2%>% 
-  kable(
-    format, 
-    booktabs = TRUE,
-    linesep = "",
-    escape = FALSE,
-    col.names = c("Antibiotic", "n", "%"),
-    caption = "Distributions of antibiotics table" 
-  )
-
-if(format != "markdown"){
-  tbl_2_rend %<>% kable_styling()
-}
-
-tbl_2_rend
-
+median(epi[presc == "no" & !is.na(tts)]$tts)
+quantile(epi[presc == "no" & !is.na(tts)]$tts, c(0.25, 0.75))
 
 ```
 
@@ -425,93 +209,218 @@ tab_odds <- function(dt, outcome, var, group){
 
 ```
 
+```{r plot-age-sep}
 
-```{r table-3}
+age_sep <- epi[, .(age, sep, decile = ntile(age, n = 10))] %>% 
+  .[, .(age = mean(age), sep = mean(sep == "yes")), by = decile]
 
-tab_sep_odds <- partial(tab_odds, outcome = "sep == 'yes'")
+ggplot(age_sep, aes(age, sep * 1000)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  scale_y_continuous(limits = c(0, NA)) + 
+  labs(x = "\n\nAge deciles", y = "Number of sepsis cases per 1,000 patients\n\n") + 
+  theme_minimal()
 
-params <- list(aux = c("patid", "sep", "nmr"), cast = c("or", "p.value"))
+```
 
-tbl_def <- list(
-  "No antibiotic" = tab(presc ~ ., fun = tab_sep_odds, params, keep_only = "no"),
-  "Age (cat.)" = tab(age_cat ~ ., fun = tab_sep_odds, params),
-  "Female" = tab(female ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
-  "IMD" = tab(imd ~ ., fun = tab_sep_odds, params),
-  "Region" = tab(region ~ ., fun = tab_sep_odds, params),
-  "Financial year" = tab(year ~ ., fun = tab_sep_odds, params),
-  "CCI (cont.)" = tab(cci ~ ., fun = tab_sep_odds, params),
-  "Smoking status" = tab(smoke ~ ., fun = tab_sep_odds, params),
-  "Recurrent UTI" = tab(recur ~ ., fun = tab_sep_odds, params),
+```{r recode-age}
+# Re-center and rescale the main continuous variables
+age_ref <- 75
+age_scl <- 5
+epi[, age := .((age - age_ref) / age_scl)]
+
+```
+
+```{r transform-skew}
+
+# Since all skewed variables contain 0 entries, square root instead of 
+# the logarithm is used to model diminishing effects. This is also 
+# supported by IC measures
+epi[, cci_sqrt := sqrt(cci)]
+epi[, hosp_n_sqrt := sqrt(hosp_n)]
+epi[, hosp_nights_sqrt := sqrt(hosp_nights)]
+epi[, ae_n_sqrt := sqrt(ae_n)]
+
+```
+
+```{r table-shell}
+
+# Load the table shell
+tbl_shell <- read_csv(file.path(subfolder, "table_2_shell.csv"), col_types = "ccc")
+setDT(tbl_shell)
+
+add_shell_headers <- function(rend, shell){
+  # Add the category headers based on the table shell instead of the list
+  # definition that was used above
   
-  "Inpatient admission" = list(
-    "IP prior 7 days" = tab(hosp_7 ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
-    "IP prior 30 days" = tab(hosp_30 ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
-    "IP nights last year" = tab(hosp_nights ~ ., fun = tab_sep_odds, params),
-    "hospitalisations last year" = tab(hosp_n ~ ., fun = tab_sep_odds, params)
-  ),
+  headers <- unique(shell[!is.na(header)]$header)
+  for(h in headers){
+    ids <- which(shell$header == h)
+    rend %<>% group_rows(h, min(ids), max(ids)) 
+  }
+  rend
+}
+
+render <- function(table, columns = 1, header = NULL, caption = ""){
   
-  "Accidents & Emergencies" = list(
-    "A&E prior 30 days" = tab(ae_30 ~ ., fun = tab_sep_odds, params),
-    "attendances last year" = tab(ae_n ~ ., fun = tab_sep_odds, params)
-  ),
+  render <- 
+    table %>% 
+    kable(
+      format, 
+      booktabs = TRUE,
+      linesep = "",
+      escape = FALSE,
+      col.names = c("Patient characteristics", rep(c("OR (95%-CI)", "p-value"), columns)),
+      caption = caption
+    ) 
   
-  "Antibiotics in prior 30 days" = tab(abx_30 ~ ., fun = tab_sep_odds, params, keep_only = "yes"),
-  "Index event was home visit" = tab(home ~ ., fun = tab_sep_odds, params, keep_only = "yes")
-)
+  if(format != "markdown"){
+    render %<>%  
+      kable_styling() %>% 
+      add_shell_headers(tbl_shell)
+    
+    if(!is.null(header)){
+      render %<>% add_header_above(header)
+    }
+    
+  }
+
+  render
+}
+
+```
+
+```{r model-definition}
+
+fit_model <- function(formula, data){
+  # Fit a GEE logistic regression of a certain form (formula) to some data (data). 
+  # This is mostly a convenience function to fit models with and without interactions.
+  
+  fit <- geeglm(formula, id = patid, family = binomial, data = data, corstr = "exchangeable")
+  fit
+}
+
+summarise_model <- function(model){
+  # Extract the coefficients, 95% confidence intervals and p-values 
+  # from a fitted model
+  
+  coefs <- tidy(model)
+  setDT(coefs)
+  
+  coefs[, est := prty(exp(estimate), 2)]
+  coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
+  coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
+  coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
+  coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+  
+  coefs %<>% .[tbl_shell, on = .(term)]
+  coefs[, .(var, or, p.value)]
+}
+
+fit_and_summarise <- function(formula, data){
+  # Wrapper function to fit a model and simultaneously summarise it
+  
+  model <- fit_model(formula, data)
+  list(model = model, summary = summarise_model(model))
+}
+
+```
+
+
+```{r define-table-2}
+
+
+table_2 <- function(dt, tab_fun){
+  tbl_parms <- list(aux = c("patid", "sep", "died", "other_hosp", "nmr"), cast = c("or", "p.value"))
+
+  tbl_def <- list(
+    "No antibiotic" = tab(presc ~ ., fun = tab_fun, tbl_parms, keep_only = "no"),
+    "Age (cont.)" = tab(age ~ ., fun = tab_fun, tbl_parms),
+    "Female" = tab(female ~ ., fun = tab_fun, tbl_parms, keep_only = "yes"),
+    "IMD" = tab(imd ~ ., fun = tab_fun, tbl_parms),
+    "Region" = tab(region ~ ., fun = tab_fun, tbl_parms),
+    "Financial year" = tab(year ~ ., fun = tab_fun, tbl_parms),
+    "CCI (cont.)" = tab(cci_sqrt ~ ., fun = tab_fun, tbl_parms),
+    "Smoking status" = tab(smoke ~ ., fun = tab_fun, tbl_parms),
+    "Recurrent UTI" = tab(recur ~ ., fun = tab_fun, tbl_parms),
+    
+    "Inpatient admission" = list(
+      "IP prior 7 days" = tab(hosp_7 ~ ., fun = tab_fun, tbl_parms, keep_only = "yes"),
+      "IP prior 30 days" = tab(hosp_30 ~ ., fun = tab_fun, tbl_parms, keep_only = "yes"),
+      "IP nights last year" = tab(hosp_nights_sqrt ~ ., fun = tab_fun, tbl_parms),
+      "hospitalisations last year" = tab(hosp_n_sqrt ~ ., fun = tab_fun, tbl_parms)
+    ),
+    
+    "Accidents & Emergencies" = list(
+      "A&E prior 30 days" = tab(ae_30 ~ ., fun = tab_fun, tbl_parms),
+      "attendances last year" = tab(ae_n_sqrt ~ ., fun = tab_fun, tbl_parms)
+    ),
+    
+    "Antibiotics in prior 30 days" = tab(abx_30 ~ ., fun = tab_fun, tbl_parms, keep_only = "yes"),
+    "Index event was home visit" = tab(home ~ ., fun = tab_sep_odds, tbl_parms, keep_only = "yes")
+  )
+  
+  if(length(unique(dt$female)) == 1){
+    # For stratified analysis
+    tbl_def["Female"] <- NULL
+  }
+  
+  tbl_def %>% render_tab(dt)
+}
+
+
+```
+
+
+```{r table-2}
 
 # Calculate the table using functions from 00_tabulation.R
-tbl_3 <- tbl_def %>% render_tab(epi)
+tab_sep_odds <- partial(tab_odds, outcome = "sep == 'yes'")
+tbl_2 <- table_2(epi, tab_sep_odds)
 
+# Run a fully adjusted model with gender interaction 
+covars <- c("age", "imd", "region", "year", "cci_sqrt", "smoke",
+            "hosp_7", "hosp_30", "hosp_nights_sqrt", "hosp_n_sqrt", 
+            "ae_30", "ae_n_sqrt", "abx_30", "home")
 
-# Run a fully adjusted model with all variables 
-variables <- c("presc", "age_cat", "female", "imd", "region", "year", "cci", "smoke",
-               "hosp_7", "hosp_30", "hosp_nights", "hosp_n", "ae_30", "ae_n", "abx_30")
-
-if(time_window == 60){
-  # NOTE: Recurrent UTI has p-value > 0.2, home visit is <0.2 for 60 day window
-  variables <- c(variables, "home")
-}
-
-full_form <- as.formula(str_c("sep == 'yes' ~ ", str_c(variables, collapse = " + ")))
-full_mod <- geeglm(full_form, id = patid, family = binomial, data = epi, corstr = "exchangeable")
-
-full_coefs <- tidy(full_mod)
-setDT(full_coefs)
-
-full_coefs[, est := prty(exp(estimate), 2)]
-full_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
-full_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
-full_coefs[, or_mult := str_c(est, " (", lower, "-", upper, ")")]
-full_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
-
-full_coefs %<>% .[-1] %>% 
-  cbind(map_df(tbl_3, ~ (if(any(.$p.value_all < 0.2)) .[, "var"] else NULL)))
-
-
+full_form <- as.formula(str_c("sep == 'yes' ~ presc + female + ", str_c(covars, collapse = " + ")))
+full_fit <- fit_and_summarise(full_form, epi)
 
 # Render with kable
-tbl_3_rend <- 
-  tbl_3 %>%
+tbl_2 %>%
   rbindlist() %>% 
-  merge(full_coefs[, .(var, or_mult, p.value)], by = "var", all.x = TRUE, sort = FALSE) %>% 
-  kable(
-    format, 
-    booktabs = TRUE,
-    linesep = "",
-    escape = FALSE,
-    col.names = c("Patient characteristics", rep(c("OR (95%-CI)", "p-value"), 2)),
-    caption = "Odds of sepsis table" 
-  ) 
+  .[(tbl_shell[, .(var)]), on = .(var)] %>% 
+  merge(full_fit$summary[, .(var, or, p.value)], by = "var", all.x = TRUE, sort = FALSE) %>% 
+  render(columns = 2, 
+         caption = "Odds of sepsis table", 
+         header = c(" " = 1, "Univariate" = 2, "Multivariate" = 2))
+  
+```
 
-if(format != "markdown"){
-  tbl_3_rend %<>%  
-    kable_styling() %>% 
-    add_header_above(c(" " = 1, "Univariate" = 2, "Multivariate" = 2)) %>% 
-    annotate_table(tbl_3)
-}
+```{r table-2-stratified}
 
-tbl_3_rend
+# Run a fully adjusted model with gender interaction 
+int_form <- as.formula(str_c("sep == 'yes' ~ presc * female + ", str_c(covars, collapse = " + ")))
+int_fit <- fit_and_summarise(int_form, epi)
+int_fit$summary%>% 
+  render(caption = "Multivariate analysis with interaction")
 
+# Run an ajusted model stratified by gender
+strat_form <- as.formula(str_c("sep == 'yes' ~ presc + ", str_c(covars, collapse = " + ")))
+
+male_univ <- table_2(epi[female == "no"], tab_sep_odds)
+male_univ %>% rbindlist() %>%  render(columns = 1, caption = "Odds of sepsis table (male)", header = c(" " = 1, "Univariate" = 2))
+
+male_fit <- fit_and_summarise(strat_form, epi[female == "no"])
+male_fit$summary%>% 
+  render(caption = "Multivariate analysis of men")
+
+female_univ <- table_2(epi[female == "yes"], tab_sep_odds)
+female_univ %>% rbindlist() %>%  render(columns = 1, caption = "Odds of sepsis table (female)", header = c(" " = 1, "Univariate" = 2))
+
+female_fit <- fit_and_summarise(strat_form, epi[female == "yes"])
+female_fit$summary %>% 
+  render(caption = "Multivariate analysis of women")
 
 ```
 
@@ -519,103 +428,254 @@ tbl_3_rend
 
 # See Bender et al. (2007) for formulas
 
-mean_mod <- glm(full_form, family = binomial, data = epi) # This is approximate, coefficients stay very close
+# This is approximate, but coefficients stay very(!) close
+mean_model <- glm(formula = full_form, family = binomial, data = epi) 
+
+as_grid <- with(epi, expand.grid(age = levels(age_cat), female = levels(female)))
+
+n_boot <- bootstrap_nneh
+n_smpl <- nrow(epi)
 
 
-# Exposure impact number
+# Helper functions ------------------------------------------------------------------------
 
-ard_exp <- function(exposed){
-  # Exposed in this case means "not prescribed"
-  pr_actual <- predict(mean_mod, newdata = exposed, type = "response")
-  exposed$presc <- "yes"
-  pr_trt <- predict(mean_mod, newdata = exposed, type = "response")
+model <- function(data, formula = full_form, strip = TRUE){
+  # Fit a logistic regression to data. If strip is TRUE, remove unnecessary 
+  # objects within the fitted model to avoid memory overflow.
   
-  mean(pr_actual - pr_trt)
+  fit <- glm(formula = formula, family = binomial, data = data)
+  
+  if(strip){
+    strip_glm(fit)
+  } else {
+    fit
+  }
 }
 
-  # Point estimate
-ein <- 1 / ard_exp(epi[presc == "no"])
-print(str_c("The exposure impact number was ", ein))
+nneh_part_by_as <- function(df, .f, .m){
+  # Calculate exposure impact number or number needed to be exposed
+  # for a grid of age and sex levels.
+  
+  val <- pmap_dbl(as_grid, ~ .f(df[age_cat == ..1 & female == ..2], .m))
+  names(val) <- str_c(as_grid$age, as_grid$female)
+  val
+}
+
+nneh_boot_ci <- function(dt, .f, idx, models, strata = FALSE){
+  # Calculate confidence intervals for NNEH or EIN from a bootstrap
+  
+  if(deparse(substitute(.f)) == "ein"){
+    exposed <- "no"
+  } else {
+    exposed <- "yes"
+  }
+  
+  if(strata){
+    boot <- map2(idx, models, ~ nneh_part_by_as(dt[.x][presc == (exposed)], .f, .y))
+    nms <- str_c(as_grid$age, as_grid$female)
+  } else {
+    boot <- map2(idx, models, ~ .f(dt[.x][presc == (exposed)], .y))
+    nms <- "all"
+  }
+  
+  boot %>% 
+    map(~ ifelse(. <= 0, Inf, .)) %>% # Replace no effect (=negative) with infinite 
+                                      # (an infinite amount of patients could be treated 
+                                      # without any extra sepsis cases)
+    transpose() %>% 
+    map(~ quantile(., prob = c(0.025, 0.975))) %>% 
+    set_names(nms)
+}
+
+
+
+# Exposure impact number ------------------------------------------------------------------
+
+ard_exp <- function(exposed, model){
+  # Calculate the average risk difference (ARD) in the exposed population
+  # NOTE: Exposed in this case means "not prescribed"
+  #
+  # See Bender et al. (2007) for the formula
+  
+  pr_actual <- predict(model, newdata = exposed, type = "response")
+  exposed$presc <- "yes"
+  pr_trt <- predict(model, newdata = exposed, type = "response")
+  
+  mean(pr_actual - pr_trt) # This is the reverse of the formula in the paper (we calculate "harm")
+}
+
+
+ein <- function(exposed, model){
+  # Calculate the exposure impact number (EIN), i.e. the effect of 
+  # removing exposure from an exposed population. In the context of 
+  # this study, this would mean treating previously untreated patients
+  # immediately with antibiotics.
+  #
+  # The EIN is the inverse of the ARD in the exposed population.
+  
+  1 / ard_exp(exposed, model)
+}
+
+
+  # Point estimates
+ein_all <- ein(epi[presc == "no"], mean_model)
+print(str_c("The exposure impact number was ", ein_all))
+
+ein_strat <- nneh_part_by_as(epi[presc == "no"], ein, mean_model)
+print(ein_strat)
 
   # Bootstrapped confidence intervals
-n_boot <- 10000
-n_exp <- nrow(epi[presc == "no"])
-
-set.seed <- 123
-ard_exp_boot <- rerun(n_boot, sample(1:n_exp, n_exp, replace = TRUE)) %>% 
-  map_dbl(~ ard_exp(epi[presc == "no"][.]))
-ard_exp_boot <- sort(ard_exp_boot, decreasing = TRUE)
-
-ein_ci <- 1 / ard_exp_boot[c(0.025 * n_boot, 0.975 * n_boot)]
+if(n_boot > 0){
+  set.seed <- 123
+  
+  ein_idx <- rerun(n_boot, sample(1:n_smpl, n_smpl, replace = TRUE))
+  ein_models <- map(ein_idx, ~ model(data = epi[.]))
+  
+  # Confidence interval for the overall effect
+  ein_all_ci <- nneh_boot_ci(epi, ein, ein_idx, ein_models)
+  print(ein_all_ci)
+  
+  # Confidence interval within strata
+  ein_strat_ci <- nneh_boot_ci(epi, ein, ein_idx, ein_models, strata = TRUE)
+  print(ein_strat_ci)
+}
 
 
 
 # Number needed to be exposed
-ard_un <- function(unexposed){
+ard_un <- function(unexposed, model){
   # Exposed in this case means "not prescribed"
-  pr_actual <- predict(mean_mod, newdata = unexposed, type = "response")
+  pr_actual <- predict(model, newdata = unexposed, type = "response")
   unexposed$presc <- "no"
-  pr_no <- predict(mean_mod, newdata = unexposed, type = "response")
+  pr_no <- predict(model, newdata = unexposed, type = "response")
   
-  mean(pr_no - pr_actual)
+  mean(pr_no - pr_actual) # This is the reverse of the formula in the paper (we calculate "harm")
 }
 
-  # Point estimate
-nne <- 1 / ard_un(epi[presc == "yes"])
-print(str_c("The number needed to expose was ", nne))
+
+nne <- function(unexposed, model){
+  # Calculate the number needed to be exposed (NNE), i.e. the effect of 
+  # adding exposure to an unexposed population. In the context of 
+  # this study, this would mean not treating previously treated patients
+  # with antibiotics.
+  #
+  # The NNE is the inverse of the ARD in the unexposed population.
+  
+  1 / ard_un(unexposed, model)
+}
+
+
+  # Point estimates
+nne_all <- nne(epi[presc == "yes"], mean_model)
+print(str_c("The number needed to expose was ", nne_all))
+
+nne_strat <- nneh_part_by_as(epi[presc == "yes"], nne, mean_model)
+print(nne_strat)
 
   # Bootstrapped confidence intervals
-n_boot <- 10000
-n_un <- nrow(epi[presc == "yes"])
-
-set.seed <- 123
-ard_un_boot <- rerun(n_boot, sample(1:n_un, n_un, replace = TRUE)) %>% 
-  map_dbl(~ ard_un(epi[presc == "yes"][.]))
-ard_un_boot <- sort(ard_un_boot, decreasing = TRUE)
-
-nne_ci <- 1 / ard_un_boot[c(0.025 * n_boot, 0.975 * n_boot)]
-
-
-
-```
-
-
-```{r sens-abx-before}
-
-# Run some additional analysis to investigate the sensitivity of the results to patients with antibiotics in the days before episode start
-
-# No antibiotic whatsoever 7 days before
-sens_form <- as.formula(str_c("sep == 'yes' ~ ", str_c(variables, collapse = " + ")))
-sens_no7 <- geeglm(sens_form, id = patid, family = binomial, data = epi[abx_7 == "no"], corstr = "exchangeable")
-
-no7_coefs <- tidy(sens_no7)
-setDT(no7_coefs)
-
-no7_coefs[, est := prty(exp(estimate), 2)]
-no7_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
-no7_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
-no7_coefs[, or_mult := str_c(est, " (", lower, "-", upper, ")")]
-no7_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
-
-
-# No antibiotic whatsoever 30 days before
-variables <- c("presc", "age_cat", "female", "imd", "region", "year", "cci", "smoke",
-               "hosp_7", "hosp_30", "hosp_nights", "hosp_n", "ae_30", "ae_n")
-
-sens_form <- as.formula(str_c("sep == 'yes' ~ ", str_c(variables, collapse = " + ")))
-sens_noabx <- geeglm(sens_form, id = patid, family = binomial, data = epi[abx_30 == "no"], corstr = "exchangeable")
-
-noabx_coefs <- tidy(sens_noabx)
-setDT(noabx_coefs)
-
-noabx_coefs[, est := prty(exp(estimate), 2)]
-noabx_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
-noabx_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
-noabx_coefs[, or_mult := str_c(est, " (", lower, "-", upper, ")")]
-noabx_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+if(n_boot > 0){
+  set.seed <- 234
+  
+  nne_idx <- rerun(n_boot, sample(1:n_smpl, n_smpl, replace = TRUE))
+  nne_models <- map(nne_idx, ~ model(data = epi[.]))
+  
+  # Confidence interval for the overall effect
+  nne_all_ci <- nneh_boot_ci(epi, nne, nne_idx, nne_models)
+  print(nne_all_ci)
+  
+  # Confidence interval within strata
+  nne_strat_ci <- nneh_boot_ci(epi, nne, nne_idx, nne_models, strata = TRUE)
+  print(nne_strat_ci)
+}
 
 ```
 
+```{r sens}
+
+# Run some additional analysis to investigate the sensitivity of the results to different definitions of the study population and outcomes
+
+# Run some additional analysis to investigate the association with sepsis in first episode 
+first_univ <- table_2(epi[, .SD[1], by = patid], tab_sep_odds)
+first_univ %>% rbindlist() %>%  render(columns = 1, caption = "Odds of sepsis table (first)", header = c(" " = 1, "Univariate" = 2))
+
+first_form <- as.formula(str_c("sep == 'yes' ~ presc + female +", str_c(covars, collapse = " + ")))
+first <- fit_and_summarise(first_form, epi[, .SD[1], by = patid])
+first$summary%>% render()
+
+first_form <- as.formula(str_c("sep == 'yes' ~ presc * female +", str_c(covars, collapse = " + ")))
+first_int <- fit_and_summarise(no7_form, epi[, .SD[1], by = patid])
+first_int$summary%>% render()
+
+first_form <- as.formula(str_c("sep == 'yes' ~ presc + ", str_c(covars, collapse = " + ")))
+first_male <- fit_and_summarise(first_form, epi[, .SD[1], by = patid][female == "no"])
+first_male$summary%>% render()
+first_female <- fit_and_summarise(first_form, epi[, .SD[1], by = patid][female == "yes"])
+first_female$summary%>% render()
+
+# Run some additional analysis to investigate the association with death 
+tab_died_odds <- partial(tab_odds, outcome = "died == 'yes'")
+died_univ <- table_2(epi, tab_died_odds)
+died_univ %>% rbindlist() %>%  render(columns = 1, caption = "Odds of death table", header = c(" " = 1, "Univariate" = 2))
+
+died_form <- as.formula(str_c("died == 'yes' ~ presc + female +", str_c(covars, collapse = " + ")))
+died <- fit_and_summarise(died_form, epi)
+died$summary%>% render()
+
+died_form <- as.formula(str_c("died == 'yes' ~ presc * female +", str_c(covars, collapse = " + ")))
+died_int <- fit_and_summarise(died_form, epi)
+died_int$summary%>% render()
+
+died_form <- as.formula(str_c("died == 'yes' ~ presc + ", str_c(covars, collapse = " + ")))
+died_male <- fit_and_summarise(died_form, epi[female == "no"])
+died_male$summary%>% render()
+died_female <- fit_and_summarise(died_form, epi[female == "yes"])
+died_female$summary%>% render()
+
+# Run some additional analysis to investigate the association with non-UTI/sepsis hospitalisations 
+tab_other_odds <- partial(tab_odds, outcome = "other_hosp == 'yes'")
+other_univ <- table_2(epi, tab_other_odds)
+other_univ %>% rbindlist() %>%  render(columns = 1, caption = "Odds of other hosp table", header = c(" " = 1, "Univariate" = 2))
+
+other_form <- as.formula(str_c("other_hosp == 'yes' ~ presc + female +", str_c(covars, collapse = " + ")))
+other <- fit_and_summarise(other_form, epi)
+other$summary%>% render()
+
+other_form <- as.formula(str_c("other_hosp == 'yes' ~ presc * female +", str_c(covars, collapse = " + ")))
+other_int <- fit_and_summarise(other_form, epi)
+other_int$summary%>% render()
+
+other_form <- as.formula(str_c("other_hosp == 'yes' ~ presc + ", str_c(covars, collapse = " + ")))
+other_male <- fit_and_summarise(other_form, epi[female == "no"])
+other_male$summary%>% render()
+other_female <- fit_and_summarise(other_form, epi[female == "yes"])
+other_female$summary%>% render()
+
+```
+
+```{r nne-sens}
+
+# Calculate NNEH and confidence intervals for the secondary/sensitivity analysis
+# NOTE: do not run for analysis of sepsis with first episode as there is no effect
+
+died_form <- as.formula(str_c("died == 'yes' ~ presc + female +", str_c(covars, collapse = " + ")))
+died_glm <- model(formula = died_form, data = epi) 
+nne(epi[presc == "yes"], died_glm) %>% print()
+
+if(n_boot > 0){
+  died_boot <- map(nne_idx, ~ model(formula = died_form, data = epi[.]))
+  nneh_boot_ci(epi, nne, nne_idx, died_boot) %>% print()
+}
+
+other_form <- as.formula(str_c("other_hosp == 'yes' ~ presc + female +", str_c(covars, collapse = " + ")))
+other_glm <- model(formula = other_form, data = epi) 
+nne(epi[presc == "yes"], other_glm) %>% print()
+
+if(n_boot > 0){
+  other_boot <- map(nne_idx, ~ model(formula = other_form, data = epi[.]))
+  nneh_boot_ci(epi, nne, nne_idx, other_boot) %>% print()
+}
+
+```
 
 ```{r run-everything}
 # Helper chunk to run entire document with RStudio

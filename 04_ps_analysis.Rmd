@@ -1,8 +1,14 @@
 ---
 title: "04_ps_analysis"
 output:
-  html_document: default
   word_document: default
+  html_document: default
+params:
+  time_window: 60
+  gender: "all"
+  ps_type: "param"
+  cache: "yes"
+  format: "markdown"
 editor_options:
   chunk_output_type: console
 ---
@@ -15,7 +21,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Path from project directory to this file
 # NOTE: must be set in each programme separately
-subfolder <- "."
+subfolder <- "00_replication/gharbi_2019"
 
 # Initialise the workspace
 source(file.path(subfolder, "00_init.R"))
@@ -25,6 +31,7 @@ library(knitr)
 library(kableExtra)
 library(broom)
 library(ggplot2)
+library(forcats)
 
 # Analysis packages
 library(MatchIt)
@@ -34,15 +41,24 @@ library(survival)
 library(twang)
 library(rbounds)
 
-format <- "markdown"
+# Shorten parameters
+time_window <- params$time_window
+gender <- params$gender
+ps_type <- params$ps_type
+format <- params$format
+cache <- params$cache
 
 ```
 
 ```{r load_data}
 
-time_window <- 60
-
 epi <- load_derived(str_c("epi_", time_window))
+
+if(gender == "female"){
+  epi %<>% .[female == "yes"]
+} else if (gender == "male"){
+  epi %<>% .[female == "no"]
+}
 
 ```
 
@@ -54,34 +70,79 @@ epi[, outcome := as.integer(sep == "yes")] # Outcome = "sepsis"
 
 ```
 
+```{r recode-years}
+
+# CHANGE June 6th 2020: 
+# This change in coding the year was made in response to a request by reviewer #1
+epi[, year := fct_relevel(year, "2007", "2008", "2009")]
+
+```
+
+```{r recode-age}
+# Re-center and rescale the main continuous variables
+age_ref <- 75
+age_scl <- 5
+epi[, age := .((age - age_ref) / age_scl)]
+
+```
+
+```{r transform-skew}
+
+# Since all skewed variables contain 0 entries, square root instead of 
+# the logarithm is used to model diminishing effects. This is also 
+# supported by IC measures
+epi[, cci_sqrt := sqrt(cci)]
+epi[, hosp_n_sqrt := sqrt(hosp_n)]
+epi[, hosp_nights_sqrt := sqrt(hosp_nights)]
+epi[, ae_n_sqrt := sqrt(ae_n)]
+
+```
+
 ```{r set_ps_type}
 
-# Define whether to use parametric (logistic regression) or non-parametric (gradient boost regression)
-# Uncomment the desired type
-#ps_type <- "param"
-ps_type <- "non-param"
+ps_path <- file.path(subfolder, mat_dir, 
+                     str_c("epi", time_window, gender, ps_type, "ps.rds", sep = "_"))
 
-# Set the basic formula
-ps_form <- treat ~ age_cat + female + region + imd + year + 
-                   cci + recur + hosp_7 + hosp_30 + hosp_n + 
-                   hosp_nights + ae_30 + ae_n + abx_30 + home
-
-
-
-if(ps_type == "param"){
-  
-  # Classical logistic regression propensity score without interactions
-  ps_glm_mod <- glm(ps_form, data = epi, family = binomial)
-  epi[, ps := predict(ps_glm_mod, type = "response")]
+ # Set the basic formula
+if(gender != "all"){
+  ps_form <- treat ~ age + region + imd + year + 
+                   cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
+                   hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
 } else {
+  ps_form <- treat ~ age + female + region + imd + year + 
+                   cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
+                   hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+}
+
+
+if(cache == "yes"){
+  # Load previously calculated scores from disk
+  epi <- read_rds(ps_path)
   
-  # Non-parametric gradient boosting regression propensity score
-  ps_gbm_mod <- ps(ps_form, data = epi, n.trees = 5000, 
-                   interaction.depth = 4, 
-                   shrinkage = 0.01, 
-                   stop.method = "es.mean",
-                   estimand = "ATT")
-  epi[, ps := ps_gbm_mod$ps$es.mean.ATT]
+} else {
+  # Calculate propensity scores fresh
+  
+  # Define whether to use parametric (logistic regression) or non-parametric (gradient boost regression)
+  # Uncomment the desired type
+  
+  if(ps_type == "param"){
+    
+    # Classical logistic regression propensity score without interactions
+    ps_glm_mod <- glm(ps_form, data = epi, family = binomial)
+    epi[, ps := predict(ps_glm_mod, type = "response")]
+  } else {
+    
+    # Non-parametric gradient boosting regression propensity score
+    ps_gbm_mod <- ps(ps_form, data = epi, n.trees = 5000, 
+                     interaction.depth = 4, 
+                     shrinkage = 0.01, 
+                     stop.method = "es.mean",
+                     estimand = "ATT")
+    epi[, ps := ps_gbm_mod$ps$es.mean.ATT]
+  }
+  
+  
+  write_rds(epi, ps_path)
 }
 
 ```
@@ -168,6 +229,15 @@ tbl_diff_b
 
 ```
 
+```{r fill-na}
+
+epi[is.na(tts), tts := 60]
+epi[is.na(tth), tth := 60]
+epi[is.na(ttd), ttd := 60]
+epi[is.na(constype), constype := 0]
+
+```
+
 ```{r match}
 
 # Define parameters
@@ -175,18 +245,29 @@ m_meth <- "nearest"
 n_ratio <- 5
 cal <- 0.25
 
-# Run matching (warning, can take long. Optimal matching not possible due to memory limits)
-set.seed(1107)
-matched <- matchit(ps_form, data = epi, distance = epi$ps, 
-                   method = m_meth, ratio = n_ratio, caliper = cal)
+m_path <- file.path(
+  subfolder, mat_dir, 
+  str_c("epi", time_window, gender, ps_type, m_meth, n_ratio, "match.rds", sep = "_")
+)
 
-# Save the matching results
-m_path <- file.path(subfolder, mat_dir, 
-                    str_c("epi", time_window, m_meth, n_ratio, "match.rds", sep = "_"))
-write_rds(matched, m_path)
+if(cache == "yes"){
+  # Load previously calculated matches from disk
+  matched <- read_rds(m_path)
+} else {
+  # Caculate the matches anew
+  # Run matching (warning, can take long. Optimal matching not possible due to memory limits)
+  set.seed(1107)
+  matched <- matchit(ps_form, data = epi, distance = epi$ps, 
+                     method = m_meth, ratio = n_ratio, caliper = cal)
+  
+  # Save the matching results
+  write_rds(matched, m_path)
+}
 
+```
 
-# Extract matched data
+```{r extract-matches}
+
 epi_m <- match.data(matched) %>% as.data.table()
 
 ```
@@ -212,9 +293,15 @@ dx.wts(epi$iptw, data = epi, var = all.vars(ps_form)[-1], treat.var = "treat", e
 
 ```{r define_analysis}
 
-a_form <- outcome ~ treat + age_cat +  female + region + imd + year + 
-                    cci + smoke + hosp_7 + hosp_30 + hosp_n + 
-                    hosp_nights + ae_30 + ae_n + abx_30 + home
+if(gender != "all"){
+  a_form <- outcome ~ treat + age + region + imd + year + 
+                    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
+                    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+} else {
+  a_form <- outcome ~ treat + female + age + region + imd + year + 
+                    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
+                    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home  
+}
 
 a_lbls <- list(
   "No antibiotic", 
@@ -234,7 +321,28 @@ a_lbls <- list(
   "Antibiotics in prior 30 days",
   "Index event was home visit"
 )
+
+```
+
+```{r table-shell}
+
+# Load the table shell
+tbl_shell <- read_csv(file.path(subfolder, "table_2_shell.csv"), col_types = "ccc")
+setDT(tbl_shell)
+
+add_shell_headers <- function(rend, shell){
+  # Add the category headers based on the table shell instead of the list
+  # definition that was used above
   
+  headers <- unique(shell[!is.na(header)]$header)
+  for(h in headers){
+    ids <- which(shell$header == h)
+    rend %<>% group_rows(h, min(ids), max(ids)) 
+  }
+  rend
+}
+
+tbl_shell[term %like% "^presc", term := str_replace(term, "prescno", "treat")]
 
 ```
 
@@ -254,8 +362,7 @@ m_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
 m_coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
 m_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
 
-# Label correctly
-m_coefs[, term := unlist(a_lbls)]
+m_coefs %<>% .[tbl_shell, on = .(term)]
 
 # Render table
 m_tbl <- 
@@ -300,7 +407,8 @@ mm$start <- epi[mm$row_num]$start
 epi_m[mm, on = .(patid, start), m_id := id]
 
 # Fit the model using a conditional logistic regression
-clr_mod <- clogit(update(a_form, ~ . + strata(m_id)), data = epi_m)
+# NOTE: use approximate method as exact crashes on the current machine
+clr_mod <- clogit(update(a_form, ~ . + strata(m_id)), data = epi_m, method = "approximate")
 
 # Extract coefficients
 c_coefs <- tidy(clr_mod)
@@ -313,7 +421,8 @@ c_coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
 c_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
 
 # Label correctly
-c_coefs[, term := unlist(a_lbls)]
+c_coefs %<>% .[tbl_shell, on = .(term)]
+
 
 # Render table
 c_tbl <- 
@@ -367,7 +476,7 @@ i_coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
 i_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
 
 # Label correctly
-i_coefs[, term := unlist(a_lbls)]
+i_coefs %<>% .[tbl_shell, on = .(term)]
 
 # Render table
 i_tbl <- 
