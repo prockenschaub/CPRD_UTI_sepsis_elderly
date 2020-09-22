@@ -54,7 +54,7 @@ save_derived <- function(x, filename, compress = "none"){
   # Result:
   #   NULL
   
-  path <- file.path(subfolder, der_dir, str_c(filename, ".rds"))
+  path <- file.path(der_dir, str_c(filename, ".rds"))
   write_rds(x, path, compress)
 }
 
@@ -69,7 +69,7 @@ load_derived <- function(filename, object_name = filename){
   # Result:
   #   the stored object (invisble)
   
-  obj <- read_rds(file.path(subfolder, der_dir, str_c(filename, ".rds")))
+  obj <- read_rds(file.path(der_dir, str_c(filename, ".rds")))
   assign(object_name, obj, envir = globalenv())
   
   invisible(obj)
