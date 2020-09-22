@@ -1,5 +1,5 @@
 ---
-title: "04_ps_analysis"
+title: "Propensity score analysis (Tables S8 and S9)"
 output:
   word_document: default
   html_document: default
@@ -19,12 +19,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r init, include = FALSE}
 
-# Path from project directory to this file
-# NOTE: must be set in each programme separately
-subfolder <- "00_replication/gharbi_2019"
-
 # Initialise the workspace
-source(file.path(subfolder, "00_init.R"))
+source(file.path("00_init.R"))
 
 # Infrastructure packages
 library(knitr)
@@ -42,11 +38,16 @@ library(twang)
 library(rbounds)
 
 # Shorten parameters
-time_window <- params$time_window
-gender <- params$gender
-ps_type <- params$ps_type
-format <- params$format
-cache <- params$cache
+time_window <- params$time_window  # 30, 60
+gender <- params$gender            # all, female, male
+ps_type <- params$ps_type          # param, non-param
+format <- params$format            # markdown, latex, html
+cache <- params$cache              # yes, no    
+           
+# Create the data directory
+if(!dir.exists("02_matched")) {
+  dir.create("02_matched")
+}
 
 ```
 
@@ -65,7 +66,7 @@ if(gender == "female"){
 ```{r transform_data}
 
 # Transform outcome and exposure into integer variables to work with all packages
-epi[, treat := as.integer(presc == "no")]     # Treament = "no antibiotic"
+epi[, treat := as.integer(presc == "no")]  # Treament = "no antibiotic"
 epi[, outcome := as.integer(sep == "yes")] # Outcome = "sepsis"
 
 ```
@@ -100,8 +101,7 @@ epi[, ae_n_sqrt := sqrt(ae_n)]
 
 ```{r set_ps_type}
 
-ps_path <- file.path(subfolder, mat_dir, 
-                     str_c("epi", time_window, gender, ps_type, "ps.rds", sep = "_"))
+ps_path <- file.path(mat_dir, str_c("epi", time_window, gender, ps_type, "ps.rds", sep = "_"))
 
  # Set the basic formula
 if(gender != "all"){
@@ -246,7 +246,7 @@ n_ratio <- 5
 cal <- 0.25
 
 m_path <- file.path(
-  subfolder, mat_dir, 
+  mat_dir, 
   str_c("epi", time_window, gender, ps_type, m_meth, n_ratio, "match.rds", sep = "_")
 )
 
@@ -327,7 +327,7 @@ a_lbls <- list(
 ```{r table-shell}
 
 # Load the table shell
-tbl_shell <- read_csv(file.path(subfolder, "table_2_shell.csv"), col_types = "ccc")
+tbl_shell <- read_csv(file.path("table_2_shell.csv"), col_types = "ccc")
 setDT(tbl_shell)
 
 add_shell_headers <- function(rend, shell){
@@ -449,13 +449,6 @@ if(format != "markdown"){
   }
 }
 c_tbl
-
-```
-
-```{r bias_sensitivity}
-
-twoway <- table(epi_m$presc, epi_m$sep)
-binarysens(twoway[1, 2], twoway[2, 1], Gamma = 10, GammaInc = 1)
 
 ```
 

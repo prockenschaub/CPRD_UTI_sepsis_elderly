@@ -1,11 +1,11 @@
 ---
-title: "Untitled"
+title: "Main analysis presented in the paper"
 output:
   word_document: default
   html_document: default
 params:
   time_window: 60
-  bootstrap_nneh: 200
+  bootstrap_nneh: 10
   format: "markdown"
 editor_options:
   chunk_output_type: console
@@ -17,13 +17,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r init, include = FALSE}
 
-# Path from project directory to this file
-# NOTE: must be set in each programme separately
-subfolder <- "00_replication/gharbi_2019"
-
 # Initialise the workspace
-source(file.path(subfolder, "00_init.R"))
-source(file.path(subfolder, "00_tabulation.R"))
+source(file.path("00_init.R"))
+source(file.path("00_tabulation.R"))
 
 # Infrastructure packages
 library(knitr)
@@ -45,12 +41,9 @@ format <- params$format
 
 ```{r load-data}
 
-patients <- load_derived("patients")
-
 epi <- load_derived(str_c("epi_", time_window))
+setDT(epi)
 setorder(epi, patid, start)
-
-abx <- load_derived("abx")
 
 ```
 
@@ -69,10 +62,6 @@ epi[, year := fct_relevel(year, "2007", "2008", "2009")]
 ```
 
 ```{r summ-measures}
-
-# Entire cohort
-mean(with(patients, year(enter_date) - year(birth_date)))
-mean(patients$female)
 
 # Episodes
 mean(epi$age)
@@ -246,7 +235,7 @@ epi[, ae_n_sqrt := sqrt(ae_n)]
 ```{r table-shell}
 
 # Load the table shell
-tbl_shell <- read_csv(file.path(subfolder, "table_2_shell.csv"), col_types = "ccc")
+tbl_shell <- read_csv(file.path("table_2_shell.csv"), col_types = "ccc")
 setDT(tbl_shell)
 
 add_shell_headers <- function(rend, shell){
@@ -603,7 +592,7 @@ first <- fit_and_summarise(first_form, epi[, .SD[1], by = patid])
 first$summary%>% render()
 
 first_form <- as.formula(str_c("sep == 'yes' ~ presc * female +", str_c(covars, collapse = " + ")))
-first_int <- fit_and_summarise(no7_form, epi[, .SD[1], by = patid])
+first_int <- fit_and_summarise(first_form, epi[, .SD[1], by = patid])
 first_int$summary%>% render()
 
 first_form <- as.formula(str_c("sep == 'yes' ~ presc + ", str_c(covars, collapse = " + ")))
