@@ -14,7 +14,7 @@
 
 # Path from project directory to this file
 # NOTE: must be set in each programme separately
-subfolder <- "."
+subfolder <- "00_replication/gharbi_2019"
 
 # Initialise the workspace
 source(file.path(subfolder, "00_init.R"))

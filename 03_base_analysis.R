@@ -1,21 +1,16 @@
----
-title: "Main analysis presented in the paper"
-output:
-  word_document: default
-  html_document: default
-params:
-  time_window: 60
-  bootstrap_nneh: 10
-  format: "markdown"
-editor_options:
-  chunk_output_type: console
----
+###########################################################################
+# Author:   Patrick Rockenschaub
+# Project:  Preserve Antibiotics through Safe Stewardship (PASS)
+#           Primary Care work package 1
+#           Gharbi et al. re-analysis
+#
+# File:     03_base_analysis.R
+# Date:     21/09/2020
+# Task:     A non-markdown copy of 03_base_analysis.Rmd
+#
+###########################################################################
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-```{r init, include = FALSE}
+# ```{r init, include = FALSE}
 
 # Initialise the workspace
 source(file.path("00_init.R"))
@@ -33,35 +28,35 @@ library(tableone)
 library(geepack)
 
 # Shorten parameters
-time_window <- params$time_window
-bootstrap_nneh <- params$bootstrap_nneh
-format <- params$format
+time_window <- 60
+bootstrap_nneh <- 10
+format <- "markdown"
 
-```
+# ```
 
-```{r load-data}
+# ```{r load-data}
 
 epi <- load_derived(str_c("epi_", time_window))
 setDT(epi)
 setorder(epi, patid, start)
 
-```
+# ```
 
-```{r recode-cci}
+# ```{r recode-cci}
 
 epi[, cci_bin := factor(cci > 0, c(FALSE, TRUE), c("0", "1+"))]
 
-```
+# ```
 
-```{r recode-years}
+# ```{r recode-years}
 
 # CHANGE June 6th 2020: 
 # This change in coding the year was made in response to a request by reviewer #1
 epi[, year := fct_relevel(year, "2007", "2008", "2009")]
 
-```
+# ```
 
-```{r summ-measures}
+# ```{r summ-measures}
 
 # Episodes
 mean(epi$age)
@@ -69,17 +64,17 @@ mean(epi$age)
 sum(epi$female == "yes")
 mean(epi$female == "yes")
 
-```
+# ```
 
 
 
-```{r table-1}
+# ```{r table-1}
 
 covar <- c("age", "age_cat", "female", "imd", "region", "year",
-             "cci", "cci_bin", "smoke", "recur",
-             "hosp_7", "hosp_30", "hosp_nights", "hosp_n",
-             "ae_30", "ae_n", "abx_7", "abx_30", "home",
-             "sep", "tts", "other_hosp", "died")
+           "cci", "cci_bin", "smoke", "recur",
+           "hosp_7", "hosp_30", "hosp_nights", "hosp_n",
+           "ae_30", "ae_n", "abx_7", "abx_30", "home",
+           "sep", "tts", "other_hosp", "died")
 
 nonnormal <- c("age", "cci", "hosp_nights", "hosp_n", "ae_n", "tts")
 
@@ -95,21 +90,21 @@ list(
   reduce(cbind) %>%
   as.data.table(keep.rownames = "var")
 
-```
+# ```
 
 
-```{r time-to-sepsis}
-
-median(epi[presc == "no" & !is.na(tts)]$tts)
-quantile(epi[presc == "no" & !is.na(tts)]$tts, c(0.25, 0.75))
+# ```{r time-to-sepsis}
 
 median(epi[presc == "no" & !is.na(tts)]$tts)
 quantile(epi[presc == "no" & !is.na(tts)]$tts, c(0.25, 0.75))
 
-```
+median(epi[presc == "no" & !is.na(tts)]$tts)
+quantile(epi[presc == "no" & !is.na(tts)]$tts, c(0.25, 0.75))
+
+# ```
 
 
-```{r tab_rate}
+# ```{r tab_rate}
 
 crude_gee <- function(mod, var){
   # Extract crude fixed effects from a fitted GEE model
@@ -196,9 +191,9 @@ tab_odds <- function(dt, outcome, var, group){
   summ[, .(var = value, .all = "all", or, p.value)]
 }
 
-```
+# ```
 
-```{r plot-age-sep}
+# ```{r plot-age-sep}
 
 age_sep <- epi[, .(age, sep, decile = ntile(age, n = 10))] %>% 
   .[, .(age = mean(age), sep = mean(sep == "yes")), by = decile]
@@ -210,17 +205,17 @@ ggplot(age_sep, aes(age, sep * 1000)) +
   labs(x = "\n\nAge deciles", y = "Number of sepsis cases per 1,000 patients\n\n") + 
   theme_minimal()
 
-```
+# ```
 
-```{r recode-age}
+# ```{r recode-age}
 # Re-center and rescale the main continuous variables
 age_ref <- 75
 age_scl <- 5
 epi[, age := .((age - age_ref) / age_scl)]
 
-```
+# ```
 
-```{r transform-skew}
+# ```{r transform-skew}
 
 # Since all skewed variables contain 0 entries, square root instead of 
 # the logarithm is used to model diminishing effects. This is also 
@@ -230,9 +225,9 @@ epi[, hosp_n_sqrt := sqrt(hosp_n)]
 epi[, hosp_nights_sqrt := sqrt(hosp_nights)]
 epi[, ae_n_sqrt := sqrt(ae_n)]
 
-```
+# ```
 
-```{r table-shell}
+# ```{r table-shell}
 
 # Load the table shell
 tbl_shell <- read_csv(file.path("table_2_shell.csv"), col_types = "ccc")
@@ -273,13 +268,13 @@ render <- function(table, columns = 1, header = NULL, caption = ""){
     }
     
   }
-
+  
   render
 }
 
-```
+# ```
 
-```{r model-definition}
+# ```{r model-definition}
 
 fit_model <- function(formula, data){
   # Fit a GEE logistic regression of a certain form (formula) to some data (data). 
@@ -313,15 +308,15 @@ fit_and_summarise <- function(formula, data){
   list(model = model, summary = summarise_model(model))
 }
 
-```
+# ```
 
 
-```{r define-table-2}
+# ```{r define-table-2}
 
 
 table_2 <- function(dt, tab_fun){
   tbl_parms <- list(aux = c("patid", "sep", "died", "other_hosp", "nmr"), cast = c("or", "p.value"))
-
+  
   tbl_def <- list(
     "No antibiotic" = tab(presc ~ ., fun = tab_fun, tbl_parms, keep_only = "no"),
     "Age (cont.)" = tab(age ~ ., fun = tab_fun, tbl_parms),
@@ -358,10 +353,10 @@ table_2 <- function(dt, tab_fun){
 }
 
 
-```
+# ```
 
 
-```{r table-2}
+# ```{r table-2}
 
 # Calculate the table using functions from 00_tabulation.R
 tab_sep_odds <- partial(tab_odds, outcome = "sep == 'yes'")
@@ -383,10 +378,10 @@ tbl_2 %>%
   render(columns = 2, 
          caption = "Odds of sepsis table", 
          header = c(" " = 1, "Univariate" = 2, "Multivariate" = 2))
-  
-```
 
-```{r table-2-stratified}
+# ```
+
+# ```{r table-2-stratified}
 
 # Run a fully adjusted model with gender interaction 
 int_form <- as.formula(str_c("sep == 'yes' ~ presc * female + ", str_c(covars, collapse = " + ")))
@@ -411,9 +406,9 @@ female_fit <- fit_and_summarise(strat_form, epi[female == "yes"])
 female_fit$summary %>% 
   render(caption = "Multivariate analysis of women")
 
-```
+# ```
 
-```{r nnh}
+# ```{r nnh}
 
 # See Bender et al. (2007) for formulas
 
@@ -469,8 +464,8 @@ nneh_boot_ci <- function(dt, .f, idx, models, strata = FALSE){
   
   boot %>% 
     map(~ ifelse(. <= 0, Inf, .)) %>% # Replace no effect (=negative) with infinite 
-                                      # (an infinite amount of patients could be treated 
-                                      # without any extra sepsis cases)
+    # (an infinite amount of patients could be treated 
+    # without any extra sepsis cases)
     transpose() %>% 
     map(~ quantile(., prob = c(0.025, 0.975))) %>% 
     set_names(nms)
@@ -506,14 +501,14 @@ ein <- function(exposed, model){
 }
 
 
-  # Point estimates
+# Point estimates
 ein_all <- ein(epi[presc == "no"], mean_model)
 print(str_c("The exposure impact number was ", ein_all))
 
 ein_strat <- nneh_part_by_as(epi[presc == "no"], ein, mean_model)
 print(ein_strat)
 
-  # Bootstrapped confidence intervals
+# Bootstrapped confidence intervals
 if(n_boot > 0){
   set.seed <- 123
   
@@ -554,14 +549,14 @@ nne <- function(unexposed, model){
 }
 
 
-  # Point estimates
+# Point estimates
 nne_all <- nne(epi[presc == "yes"], mean_model)
 print(str_c("The number needed to expose was ", nne_all))
 
 nne_strat <- nneh_part_by_as(epi[presc == "yes"], nne, mean_model)
 print(nne_strat)
 
-  # Bootstrapped confidence intervals
+# Bootstrapped confidence intervals
 if(n_boot > 0){
   set.seed <- 234
   
@@ -577,9 +572,9 @@ if(n_boot > 0){
   print(nne_strat_ci)
 }
 
-```
+# ```
 
-```{r sens}
+# ```{r sens}
 
 # Run some additional analysis to investigate the sensitivity of the results to different definitions of the study population and outcomes
 
@@ -639,9 +634,9 @@ other_male$summary%>% render()
 other_female <- fit_and_summarise(other_form, epi[female == "yes"])
 other_female$summary%>% render()
 
-```
+# ```
 
-```{r nne-sens}
+# ```{r nne-sens}
 
 # Calculate NNEH and confidence intervals for the secondary/sensitivity analysis
 # NOTE: do not run for analysis of sepsis with first episode as there is no effect
@@ -664,8 +659,8 @@ if(n_boot > 0){
   nneh_boot_ci(epi, nne, nne_idx, other_boot) %>% print()
 }
 
-```
+# ```
 
-```{r run-everything}
+# ```{r run-everything}
 # Helper chunk to run entire document with RStudio
-```
+# ```

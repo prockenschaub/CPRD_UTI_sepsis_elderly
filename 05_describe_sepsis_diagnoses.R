@@ -1,18 +1,7 @@
-###########################################################################
-# Author:   Patrick Rockenschaub
-# Project:  Preserve Antibiotics through Safe Stewardship (PASS)
-#           Primary Care work package 1
-#           Re-analysis of Gharbi et al. (2019) UTI paper
-#
-# File:     05_describe_sepsis_diagnoses.R
-# Date:     01/08/2019
-# Task:     Look in detail into what type of sepsis cases (urosepsis, 
-#           respiratory sepsis, unspecific sepsis, ...)
-#
-###########################################################################
 
 
-subfolder <- "."
+
+subfolder <- "00_replication/gharbi_2019"
 
 # Initialise the workspace
 source(file.path(subfolder, "00_init.R"))

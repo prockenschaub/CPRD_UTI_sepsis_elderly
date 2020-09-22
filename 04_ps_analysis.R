@@ -1,23 +1,16 @@
----
-title: "Propensity score analysis (Tables S8 and S9)"
-output:
-  word_document: default
-  html_document: default
-params:
-  time_window: 60
-  gender: "all"
-  ps_type: "param"
-  cache: "yes"
-  format: "markdown"
-editor_options:
-  chunk_output_type: console
----
+###########################################################################
+# Author:   Patrick Rockenschaub
+# Project:  Preserve Antibiotics through Safe Stewardship (PASS)
+#           Primary Care work package 1
+#           Gharbi et al. re-analysis
+#
+# File:     04_ps_analysis.R
+# Date:     21/09/2020
+# Task:     A non-markdown copy of 04_ps_analysis.Rmd
+#
+###########################################################################
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-```{r init, include = FALSE}
+# ```{r init, include = FALSE}
 
 # Initialise the workspace
 source(file.path("00_init.R"))
@@ -38,22 +31,23 @@ library(twang)
 library(rbounds)
 
 # Shorten parameters
-time_window <- params$time_window  # 30, 60
-gender <- params$gender            # all, female, male
-ps_type <- params$ps_type          # param, non-param
-format <- params$format            # markdown, latex, html
-cache <- params$cache              # yes, no    
-           
+time_window <- 60          # 30, 60
+gender <- "all"            # all, female, male
+ps_type <- "param"         # param, non-param
+format <- "markdown"       # markdown, latex, html
+cache <- "no"              # yes, no             
+
 # Create the data directory
 if(!dir.exists("02_matched")) {
   dir.create("02_matched")
 }
 
-```
+# ```
 
-```{r load_data}
+# ```{r load_data}
 
 epi <- load_derived(str_c("epi_", time_window))
+setDT(epi)
 
 if(gender == "female"){
   epi %<>% .[female == "yes"]
@@ -61,33 +55,33 @@ if(gender == "female"){
   epi %<>% .[female == "no"]
 }
 
-```
+# ```
 
-```{r transform_data}
+# ```{r transform_data}
 
 # Transform outcome and exposure into integer variables to work with all packages
 epi[, treat := as.integer(presc == "no")]  # Treament = "no antibiotic"
 epi[, outcome := as.integer(sep == "yes")] # Outcome = "sepsis"
 
-```
+# ```
 
-```{r recode-years}
+# ```{r recode-years}
 
 # CHANGE June 6th 2020: 
 # This change in coding the year was made in response to a request by reviewer #1
 epi[, year := fct_relevel(year, "2007", "2008", "2009")]
 
-```
+# ```
 
-```{r recode-age}
+# ```{r recode-age}
 # Re-center and rescale the main continuous variables
 age_ref <- 75
 age_scl <- 5
 epi[, age := .((age - age_ref) / age_scl)]
 
-```
+# ```
 
-```{r transform-skew}
+# ```{r transform-skew}
 
 # Since all skewed variables contain 0 entries, square root instead of 
 # the logarithm is used to model diminishing effects. This is also 
@@ -97,21 +91,21 @@ epi[, hosp_n_sqrt := sqrt(hosp_n)]
 epi[, hosp_nights_sqrt := sqrt(hosp_nights)]
 epi[, ae_n_sqrt := sqrt(ae_n)]
 
-```
+# ```
 
-```{r set_ps_type}
+# ```{r set_ps_type}
 
 ps_path <- file.path(mat_dir, str_c("epi", time_window, gender, ps_type, "ps.rds", sep = "_"))
 
- # Set the basic formula
+# Set the basic formula
 if(gender != "all"){
   ps_form <- treat ~ age + region + imd + year + 
-                   cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
-                   hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+    cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
 } else {
   ps_form <- treat ~ age + female + region + imd + year + 
-                   cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
-                   hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+    cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
 }
 
 
@@ -145,9 +139,9 @@ if(cache == "yes"){
   write_rds(epi, ps_path)
 }
 
-```
+# ```
 
-```{r stand_diff}
+# ```{r stand_diff}
 
 stand_diff <- function(dt, var){
   # Calculate the standard difference of a variable between
@@ -182,20 +176,20 @@ ps_quint_diff <- function(dt, var){
 
 ps_quint_diff(epi, "ps")
 
-```
+# ```
 
-```{r common-support}
+# ```{r common-support}
 
 # Investigate the common support and shape
 ggplot(epi, aes(ps, fill = presc)) + 
-  geom_histogram(aes(y = ..density..), binwidth = 0.01, alpha = 0.5) + 
+  geom_histogram(aes(y = ..density..), binwidth = 0.01, alpha = 0.5, position = "identity") + 
   labs(x = "Propensity score", y = "Density", fill = "Immediate prescribing") + 
   theme_minimal() + 
   theme(legend.position = "bottom")
 
-```
+# ```
 
-```{r covar-balance-before}
+# ```{r covar-balance-before}
 
 # Encode categories as dummy vars for standardised difference calc
 dummy <- as.data.table(model.matrix(ps_form, data = epi)[, -1])
@@ -227,18 +221,18 @@ if(format != "markdown"){
 
 tbl_diff_b
 
-```
+# ```
 
-```{r fill-na}
+# ```{r fill-na}
 
 epi[is.na(tts), tts := 60]
 epi[is.na(tth), tth := 60]
 epi[is.na(ttd), ttd := 60]
 epi[is.na(constype), constype := 0]
 
-```
+# ```
 
-```{r match}
+# ```{r match}
 
 # Define parameters
 m_meth <- "nearest"
@@ -264,43 +258,43 @@ if(cache == "yes"){
   write_rds(matched, m_path)
 }
 
-```
+# ```
 
-```{r extract-matches}
+# ```{r extract-matches}
 
 epi_m <- match.data(matched) %>% as.data.table()
 
-```
+# ```
 
-```{r covar-balance-after-match}
+# ```{r covar-balance-after-match}
 
 summary(matched, standardize = TRUE)
 
-```
+# ```
 
-```{r weight}
+# ```{r weight}
 
 # Define inverse probability of treatment weights
 epi[, iptw := if_else(treat == 1, mean(ps) / ps, mean(1 - ps) / (1 - ps))]
 
-```
+# ```
 
-```{r covar-balance-after-weight}
+# ```{r covar-balance-after-weight}
 
 dx.wts(epi$iptw, data = epi, var = all.vars(ps_form)[-1], treat.var = "treat", estimand = "ATT")
 
-```
+# ```
 
-```{r define_analysis}
+# ```{r define_analysis}
 
 if(gender != "all"){
   a_form <- outcome ~ treat + age + region + imd + year + 
-                    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
-                    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
 } else {
   a_form <- outcome ~ treat + female + age + region + imd + year + 
-                    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
-                    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home  
+    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home  
 }
 
 a_lbls <- list(
@@ -322,9 +316,9 @@ a_lbls <- list(
   "Index event was home visit"
 )
 
-```
+# ```
 
-```{r table-shell}
+# ```{r table-shell}
 
 # Load the table shell
 tbl_shell <- read_csv(file.path("table_2_shell.csv"), col_types = "ccc")
@@ -344,9 +338,9 @@ add_shell_headers <- function(rend, shell){
 
 tbl_shell[term %like% "^presc", term := str_replace(term, "prescno", "treat")]
 
-```
+# ```
 
-```{r matched-analysis-gee}
+# ```{r matched-analysis-gee}
 
 # Fit the model using a GEE
 match_mod <- geeglm(a_form, id = patid, data = epi_m, family = binomial, corstr = "exchangeable")
@@ -391,9 +385,9 @@ if(format != "markdown"){
 
 m_tbl
 
-```
+# ```
 
-```{r matched-analysis-clr}
+# ```{r matched-analysis-clr}
 
 # Figure out which patients have been matched to each other
 mm <- as.data.table(matched$match.matrix, keep.rownames = TRUE)
@@ -450,9 +444,9 @@ if(format != "markdown"){
 }
 c_tbl
 
-```
+# ```
 
-```{r weighted_analysis}
+# ```{r weighted_analysis}
 
 iptw_mod <- geeglm(a_form, id = patid, data = epi, family = binomial, 
                    weights = iptw, corstr = "exchangeable")
@@ -499,8 +493,8 @@ if(format != "markdown"){
 i_tbl
 
 
-```
+# ```
 
-```{r run-everything}
+# ```{r run-everything}
 # Helper chunk to run entire document with RStudio
-```
+# ```
