@@ -1,0 +1,500 @@
+###########################################################################
+# Author:   Patrick Rockenschaub
+# Project:  Preserve Antibiotics through Safe Stewardship (PASS)
+#           Primary Care work package 1
+#           Gharbi et al. re-analysis
+#
+# File:     04_ps_analysis.R
+# Date:     21/09/2020
+# Task:     A non-markdown copy of 04_ps_analysis.Rmd
+#
+###########################################################################
+
+# ```{r init, include = FALSE}
+
+# Initialise the workspace
+source(file.path("00_init.R"))
+
+# Infrastructure packages
+library(knitr)
+library(kableExtra)
+library(broom)
+library(ggplot2)
+library(forcats)
+
+# Analysis packages
+library(MatchIt)
+library(lsr)
+library(geepack)
+library(survival)
+library(twang)
+library(rbounds)
+
+# Shorten parameters
+time_window <- 60          # 30, 60
+gender <- "all"            # all, female, male
+ps_type <- "param"         # param, non-param
+format <- "markdown"       # markdown, latex, html
+cache <- "no"              # yes, no             
+
+# Create the data directory
+if(!dir.exists("02_matched")) {
+  dir.create("02_matched")
+}
+
+# ```
+
+# ```{r load_data}
+
+epi <- load_derived(str_c("epi_", time_window))
+setDT(epi)
+
+if(gender == "female"){
+  epi %<>% .[female == "yes"]
+} else if (gender == "male"){
+  epi %<>% .[female == "no"]
+}
+
+# ```
+
+# ```{r transform_data}
+
+# Transform outcome and exposure into integer variables to work with all packages
+epi[, treat := as.integer(presc == "no")]  # Treament = "no antibiotic"
+epi[, outcome := as.integer(sep == "yes")] # Outcome = "sepsis"
+
+# ```
+
+# ```{r recode-years}
+
+# CHANGE June 6th 2020: 
+# This change in coding the year was made in response to a request by reviewer #1
+epi[, year := fct_relevel(year, "2007", "2008", "2009")]
+
+# ```
+
+# ```{r recode-age}
+# Re-center and rescale the main continuous variables
+age_ref <- 75
+age_scl <- 5
+epi[, age := .((age - age_ref) / age_scl)]
+
+# ```
+
+# ```{r transform-skew}
+
+# Since all skewed variables contain 0 entries, square root instead of 
+# the logarithm is used to model diminishing effects. This is also 
+# supported by IC measures
+epi[, cci_sqrt := sqrt(cci)]
+epi[, hosp_n_sqrt := sqrt(hosp_n)]
+epi[, hosp_nights_sqrt := sqrt(hosp_nights)]
+epi[, ae_n_sqrt := sqrt(ae_n)]
+
+# ```
+
+# ```{r set_ps_type}
+
+ps_path <- file.path(mat_dir, str_c("epi", time_window, gender, ps_type, "ps.rds", sep = "_"))
+
+# Set the basic formula
+if(gender != "all"){
+  ps_form <- treat ~ age + region + imd + year + 
+    cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+} else {
+  ps_form <- treat ~ age + female + region + imd + year + 
+    cci_sqrt + recur + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+}
+
+
+if(cache == "yes"){
+  # Load previously calculated scores from disk
+  epi <- read_rds(ps_path)
+  
+} else {
+  # Calculate propensity scores fresh
+  
+  # Define whether to use parametric (logistic regression) or non-parametric (gradient boost regression)
+  # Uncomment the desired type
+  
+  if(ps_type == "param"){
+    
+    # Classical logistic regression propensity score without interactions
+    ps_glm_mod <- glm(ps_form, data = epi, family = binomial)
+    epi[, ps := predict(ps_glm_mod, type = "response")]
+  } else {
+    
+    # Non-parametric gradient boosting regression propensity score
+    ps_gbm_mod <- ps(ps_form, data = epi, n.trees = 5000, 
+                     interaction.depth = 4, 
+                     shrinkage = 0.01, 
+                     stop.method = "es.mean",
+                     estimand = "ATT")
+    epi[, ps := ps_gbm_mod$ps$es.mean.ATT]
+  }
+  
+  
+  write_rds(epi, ps_path)
+}
+
+# ```
+
+# ```{r stand_diff}
+
+stand_diff <- function(dt, var){
+  # Calculate the standard difference of a variable between
+  # the treated and non-treated group
+  #
+  # Args:
+  #   dt - data.table containing the `var` and treat
+  #   var - name of the variable for which the difference 
+  #         should be calculated
+  #
+  # Return:
+  #   the standardised difference as a length one numeric vector
+  
+  cohensD(as.formula(str_c("`", var, "` ~ treat")), data = dt)
+}
+
+ps_quint_diff <- function(dt, var){
+  # Call the standardised difference separately for each 
+  # quintile of the propensity score
+  #
+  # Args:
+  #   dt - data.table containing the `var`, ps and treat
+  #   var - name of the variable for which the difference 
+  #         should be calculated
+  #
+  # Return:
+  #   the standardised differences as a length five numeric vector
+  
+  split(dt, ntile(dt$ps, 5)) %>% 
+    map_dbl(stand_diff, var)
+}
+
+ps_quint_diff(epi, "ps")
+
+# ```
+
+# ```{r common-support}
+
+# Investigate the common support and shape
+ggplot(epi, aes(ps, fill = presc)) + 
+  geom_histogram(aes(y = ..density..), binwidth = 0.01, alpha = 0.5, position = "identity") + 
+  labs(x = "Propensity score", y = "Density", fill = "Immediate prescribing") + 
+  theme_minimal() + 
+  theme(legend.position = "bottom")
+
+# ```
+
+# ```{r covar-balance-before}
+
+# Encode categories as dummy vars for standardised difference calc
+dummy <- as.data.table(model.matrix(ps_form, data = epi)[, -1])
+
+diff_before <- 
+  map(names(dummy), ps_quint_diff, dt = cbind(dummy, epi[, .(treat, ps)])) %>%
+  map(~as.data.table(t(prty(., 3)))) %>% 
+  purrr::set_names(names(dummy)) %>% 
+  rbindlist(idcol = "var")
+
+diff_before[is.na(diff_before)] <- "-"
+
+tbl_diff_b <- 
+  diff_before %>% 
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Variable/Level", str_c("Q", 1:5)),
+    caption = "Standardised differences before matching" 
+  ) 
+
+if(format != "markdown"){
+  tbl_diff_b %<>%
+    kable_styling() %>% 
+    add_header_above(c(" " = 1, "Propensity score quintiles" = 5))
+}
+
+tbl_diff_b
+
+# ```
+
+# ```{r fill-na}
+
+epi[is.na(tts), tts := 60]
+epi[is.na(tth), tth := 60]
+epi[is.na(ttd), ttd := 60]
+epi[is.na(constype), constype := 0]
+
+# ```
+
+# ```{r match}
+
+# Define parameters
+m_meth <- "nearest"
+n_ratio <- 5
+cal <- 0.25
+
+m_path <- file.path(
+  mat_dir, 
+  str_c("epi", time_window, gender, ps_type, m_meth, n_ratio, "match.rds", sep = "_")
+)
+
+if(cache == "yes"){
+  # Load previously calculated matches from disk
+  matched <- read_rds(m_path)
+} else {
+  # Caculate the matches anew
+  # Run matching (warning, can take long. Optimal matching not possible due to memory limits)
+  set.seed(1107)
+  matched <- matchit(ps_form, data = epi, distance = epi$ps, 
+                     method = m_meth, ratio = n_ratio, caliper = cal)
+  
+  # Save the matching results
+  write_rds(matched, m_path)
+}
+
+# ```
+
+# ```{r extract-matches}
+
+epi_m <- match.data(matched) %>% as.data.table()
+
+# ```
+
+# ```{r covar-balance-after-match}
+
+summary(matched, standardize = TRUE)
+
+# ```
+
+# ```{r weight}
+
+# Define inverse probability of treatment weights
+epi[, iptw := if_else(treat == 1, mean(ps) / ps, mean(1 - ps) / (1 - ps))]
+
+# ```
+
+# ```{r covar-balance-after-weight}
+
+dx.wts(epi$iptw, data = epi, var = all.vars(ps_form)[-1], treat.var = "treat", estimand = "ATT")
+
+# ```
+
+# ```{r define_analysis}
+
+if(gender != "all"){
+  a_form <- outcome ~ treat + age + region + imd + year + 
+    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home
+} else {
+  a_form <- outcome ~ treat + female + age + region + imd + year + 
+    cci_sqrt + smoke + hosp_7 + hosp_30 + hosp_n_sqrt + 
+    hosp_nights_sqrt + ae_30 + ae_n_sqrt + abx_30 + home  
+}
+
+a_lbls <- list(
+  "No antibiotic", 
+  "Age" = c("75-84", "85+"),
+  "Female",
+  "IMD" = str_c("Q", 2:5),
+  "Region" = c("London", "Midlands and East", "North"),
+  "Financial year" = str_c(c(2007:2009, 2011:2014)),
+  "CCI",
+  "Smoking status" = c("Ex-smoker", "Smoker"),
+  "Hospital discharge in prior 7 days",
+  "Hospital discharge in prior 30 days",
+  "# hospitalisations in last year",
+  "# nights spent in hospital last year",
+  "A&E in prior 30 days",
+  "# A&E attendances last year",
+  "Antibiotics in prior 30 days",
+  "Index event was home visit"
+)
+
+# ```
+
+# ```{r table-shell}
+
+# Load the table shell
+tbl_shell <- read_csv(file.path("table_2_shell.csv"), col_types = "ccc")
+setDT(tbl_shell)
+
+add_shell_headers <- function(rend, shell){
+  # Add the category headers based on the table shell instead of the list
+  # definition that was used above
+  
+  headers <- unique(shell[!is.na(header)]$header)
+  for(h in headers){
+    ids <- which(shell$header == h)
+    rend %<>% group_rows(h, min(ids), max(ids)) 
+  }
+  rend
+}
+
+tbl_shell[term %like% "^presc", term := str_replace(term, "prescno", "treat")]
+
+# ```
+
+# ```{r matched-analysis-gee}
+
+# Fit the model using a GEE
+match_mod <- geeglm(a_form, id = patid, data = epi_m, family = binomial, corstr = "exchangeable")
+
+# Extract coefficients
+m_coefs <- tidy(match_mod)
+setDT(m_coefs)
+
+m_coefs %<>% .[-1]
+m_coefs[, est := prty(exp(estimate), 2)]
+m_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
+m_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
+m_coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
+m_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+
+m_coefs %<>% .[tbl_shell, on = .(term)]
+
+# Render table
+m_tbl <- 
+  m_coefs[, .(term, or, p.value)] %>%
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Patient characteristics", "OR (95%-CI)", "p-value"),
+    caption = "Odds of sepsis after matching on propensity score, GEE model" 
+  ) 
+
+if(format != "markdown"){
+  m_tbl %<>% kable_styling()
+  
+  for(n in seq_along(a_lbls)){
+    if(names(a_lbls)[n] != ""){
+      block_start <- length(unlist(a_lbls[1:(n-1)])) + 1
+      block_end <- length(unlist(a_lbls[1:(n)]))
+      
+      m_tbl %<>% group_rows(names(a_lbls)[n], block_start, block_end)
+    }
+  }
+}
+
+m_tbl
+
+# ```
+
+# ```{r matched-analysis-clr}
+
+# Figure out which patients have been matched to each other
+mm <- as.data.table(matched$match.matrix, keep.rownames = TRUE)
+mm[, id := 1:.N]
+mm %<>% melt(id.vars = "id", value.name = "row_num")
+mm %<>% .[!is.na(row_num)]
+mm[, row_num := as.integer(row_num)]
+mm$patid <- epi[mm$row_num]$patid
+mm$start <- epi[mm$row_num]$start
+
+epi_m[mm, on = .(patid, start), m_id := id]
+
+# Fit the model using a conditional logistic regression
+# NOTE: use approximate method as exact crashes on the current machine
+clr_mod <- clogit(update(a_form, ~ . + strata(m_id)), data = epi_m, method = "approximate")
+
+# Extract coefficients
+c_coefs <- tidy(clr_mod)
+setDT(c_coefs)
+
+c_coefs[, est := prty(exp(estimate), 2)]
+c_coefs[, lower := prty(exp(conf.low), 2)]
+c_coefs[, upper := prty(exp(conf.high), 2)]
+c_coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
+c_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+
+# Label correctly
+c_coefs %<>% .[tbl_shell, on = .(term)]
+
+
+# Render table
+c_tbl <- 
+  c_coefs[, .(term, or, p.value)] %>%
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Patient characteristics", "OR (95%-CI)", "p-value"),
+    caption = "Odds of sepsis after matching on propensity score, conditional logistic model" 
+  ) 
+
+if(format != "markdown"){
+  c_tbl %<>% kable_styling()
+  
+  for(n in seq_along(a_lbls)){
+    if(names(a_lbls)[n] != ""){
+      block_start <- length(unlist(a_lbls[1:(n-1)])) + 1
+      block_end <- length(unlist(a_lbls[1:(n)]))
+      
+      c_tbl %<>% group_rows(names(a_lbls)[n], block_start, block_end)
+    }
+  }
+}
+c_tbl
+
+# ```
+
+# ```{r weighted_analysis}
+
+iptw_mod <- geeglm(a_form, id = patid, data = epi, family = binomial, 
+                   weights = iptw, corstr = "exchangeable")
+
+# Extract coefficients
+i_coefs <- tidy(iptw_mod)
+setDT(i_coefs)
+
+i_coefs %<>% .[-1]
+i_coefs[, est := prty(exp(estimate), 2)]
+i_coefs[, lower := prty(exp(estimate + qnorm(0.025) * std.error), 2)]
+i_coefs[, upper := prty(exp(estimate + qnorm(0.975) * std.error), 2)]
+i_coefs[, or := str_c(est, " (", lower, "-", upper, ")")]
+i_coefs[, p.value := if_else(p.value < 0.001, "<0.001", prty(p.value, 3))]
+
+# Label correctly
+i_coefs %<>% .[tbl_shell, on = .(term)]
+
+# Render table
+i_tbl <- 
+  i_coefs[, .(term, or, p.value)] %>%
+  kable(
+    format, 
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    col.names = c("Patient characteristics", "OR (95%-CI)", "p-value"),
+    caption = "Odds of sepsis after inverse probability of treatment weighting" 
+  ) 
+
+if(format != "markdown"){
+  i_tbl %<>% kable_styling()
+  
+  for(n in seq_along(a_lbls)){
+    if(names(a_lbls)[n] != ""){
+      block_start <- length(unlist(a_lbls[1:(n-1)])) + 1
+      block_end <- length(unlist(a_lbls[1:(n)]))
+      
+      i_tbl %<>% group_rows(names(a_lbls)[n], block_start, block_end)
+    }
+  }
+}
+
+i_tbl
+
+
+# ```
+
+# ```{r run-everything}
+# Helper chunk to run entire document with RStudio
+# ```
